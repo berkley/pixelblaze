@@ -1,11 +1,9 @@
 /*
   CYLINDER BOXES ENGINE (32 around x 8 tall, zigzag-wired height=8) + SOUND REACTIVE
-  Change requested:
-  - Bass *beats* trigger the tearing (instead of random chance)
-  - Tear color is ROYGBIV-ish based on dominant frequency (spectrum peak)
-
-  Sensor Expansion Board:
-  - Uses frequencyData[32] + energyAverage
+  Change applied:
+  - Tear band color is RANDOM (not linked to dominant frequency)
+  - Hue behavior is configurable via TEAR_HUE_MODE / TEAR_HUE / TEAR_HUE_SPAN
+  Everything else is unchanged.
 */
 
 /////////////////////
@@ -39,21 +37,30 @@ GLITCH_VAL  = 0.35
 
 // Tearing bands (now beat-triggered)
 ENABLE_TEAR = 1
-TEAR_MAX_SHIFT = 7   
+TEAR_MAX_SHIFT = 7
 TEAR_FPS = 30          // how often tear rows/shift can change while tearing
-TEAR_VAL = 0.1          // brightness of tear bands
-TEAR_STRENGTH = .6         // 0..1 how “on” the tear is during a beat pulse
+TEAR_VAL = 0.1         // brightness of tear bands
+TEAR_STRENGTH = .6     // 0..1 how “on” the tear is during a beat pulse
 
 // Beat -> tear pulse shaping
 BEAT_ENABLE = 1
-BEAT_SENS = 1.6           // higher = fewer triggers
-BEAT_FLOOR = 0.015        // ignore bass under this
+BEAT_SENS = 1.6        // higher = fewer triggers
+BEAT_FLOOR = 0.015     // ignore bass under this
 BEAT_MIN_GAP = 0.14    // seconds between beat triggers
 TEAR_PULSE_SEC = 0.12  // tear visibility duration per beat
 
+// ---- NEW: Tear hue configuration ----
+// Mode:
+//   0 = fully random each beat (default)
+//   1 = fixed hue TEAR_HUE
+//   2 = random around TEAR_HUE within +/- TEAR_HUE_SPAN/2
+TEAR_HUE_MODE = 2    
+TEAR_HUE = 0.08        // used when mode 1 or 2 (0..1)
+TEAR_HUE_SPAN = 0.5     // used when mode 2 (0..1)
+
 // Explode glitch (particles)
 ENABLE_EXPLODE = 1
-EXPLODE_RATE = 0.5 
+EXPLODE_RATE = 0.5
 PARTICLE_COUNT = 20
 PARTICLE_TTL = 0.75
 PARTICLE_VAL = 0.65
@@ -63,7 +70,7 @@ PARTICLE_RADIUS = 2.5
 MASS_MIN = 0.8
 MASS_MAX = 2.2
 
-ENABLE_TRAILS = 1
+ENABLE_TRAILS = 1  
 REINIT = 0
 
 /////////////////////
@@ -76,8 +83,8 @@ export var maxFrequencyMagnitude = 0
 export var maxFrequency = 0
 
 SOUND_ENABLE = 1
-SOUND_GAIN = 5   
-SOUND_FLOOR = 0.01 
+SOUND_GAIN = 5
+SOUND_FLOOR = 0.01
 SOUND_SMOOTH = 0.18
 
 audio = 0
@@ -129,7 +136,7 @@ tearFrame = 0
 bassAvg = 0
 beatCooldown = 0
 tearPulse = 0
-tearHueBeat = 0
+tearHueBeat = 0   // now means "beat-picked tear hue" (random/configured), not spectrum-based
 
 inited = 0
 
@@ -150,30 +157,17 @@ function wrapDxSigned(a, b) {
 function hash01(n) { return wrap01(sin(n * 12.9898 + 78.233) * 43758.5453) }
 function randRange(a, b) { return a + (b - a) * random(1) }
 
-// ROYGBIV-ish hue mapping (piecewise linear through 7 stops)
-function royHue(t) {
-  // t in 0..1
-  t = clamp(t, 0, 1)
-  // hue stops in HSV space (rough but works)
-  // R(0.00) O(0.08) Y(0.16) G(0.33) B(0.58) I(0.66) V(0.78)
-  if (t < 1/6) return 0.00 + (0.08 - 0.00) * (t * 6)
-  if (t < 2/6) return 0.08 + (0.16 - 0.08) * ((t - 1/6) * 6)
-  if (t < 3/6) return 0.16 + (0.33 - 0.16) * ((t - 2/6) * 6)
-  if (t < 4/6) return 0.33 + (0.58 - 0.33) * ((t - 3/6) * 6)
-  if (t < 5/6) return 0.58 + (0.66 - 0.58) * ((t - 4/6) * 6)
-  return 0.66 + (0.78 - 0.66) * ((t - 5/6) * 6)
-}
+// ---- NEW: tear hue picker (called on beat) ----
+function pickTearHue() {
+  if (TEAR_HUE_MODE == 1) return wrap01(TEAR_HUE)
 
-function spectrumPeakHue() {
-  // find dominant bin (0..31)
-  maxv = 0
-  maxi = 0
-  for (i = 0; i < 32; i++) {
-    v = frequencyData[i]
-    if (v > maxv) { maxv = v; maxi = i }
+  if (TEAR_HUE_MODE == 2) {
+    // random within a window around TEAR_HUE
+    return wrap01(TEAR_HUE + (random(1) * 2 - 1) * (TEAR_HUE_SPAN * 0.5))
   }
-  // map bin index to 0..1 then to ROYGBIV hue
-  return royHue(maxi / 31)
+
+  // mode 0: fully random
+  return random(1)
 }
 
 // --- SOUND ---
@@ -218,30 +212,24 @@ function updateBeatAndTear(dt) {
     return
   }
 
-  // instantaneous bass (use unsmoothed-ish from bins)
   bi = 0
   for (i = 0; i < 4; i++) bi += frequencyData[i]
   bi = clamp(bi / 4, 0, 1)
 
-  // slow average bass
   bassAvg = bassAvg + (bi - bassAvg) * 0.05
-
   beatCooldown = max(0, beatCooldown - dt)
 
-  // beat condition: bass spike above avg by sensitivity, with floor + cooldown
   if (beatCooldown <= 0 && bi > BEAT_FLOOR && bi > bassAvg * BEAT_SENS) {
     beatCooldown = BEAT_MIN_GAP
     tearPulse = 1.0
-    tearHueBeat = spectrumPeakHue()
+    // CHANGED: pick random/configured tear hue on each beat
+    tearHueBeat = pickTearHue()
   } else {
-    // decay tearPulse
     tearPulse = max(0, tearPulse - dt / TEAR_PULSE_SEC)
   }
 
-  // while tearing, keep hue tracking peak a bit (feels more “frequency-colored”)
-  if (tearPulse > 0.05) {
-    tearHueBeat = spectrumPeakHue()
-  }
+  // CHANGED: no longer tracks spectrum while tearing (leave hue stable during pulse)
+  // (everything else unchanged)
 }
 
 // --- motion ---
@@ -519,7 +507,7 @@ export function beforeRender(delta) {
   tearOn1 = (r1 < tearProb) ? 1 : 0
   tearOn2 = (r2 < tearProb) ? 1 : 0
 
-  // Tear color from dominant frequency (ROYGBIV)
+  // CHANGED: Tear color is random/configured on beat (tearHueBeat), not spectrum-based
   tearHue0 = tearHueBeat
   tearHue1 = tearHueBeat
   tearHue2 = tearHueBeat
