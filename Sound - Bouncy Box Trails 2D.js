@@ -39,21 +39,21 @@ GLITCH_VAL  = 0.35
 
 // Tearing bands (now beat-triggered)
 ENABLE_TEAR = 1
-TEAR_MAX_SHIFT = 7
+TEAR_MAX_SHIFT = 7   
 TEAR_FPS = 30          // how often tear rows/shift can change while tearing
-TEAR_VAL = 0.3         // brightness of tear bands
-TEAR_STRENGTH = 0.8    // 0..1 how “on” the tear is during a beat pulse
+TEAR_VAL = 0.1          // brightness of tear bands
+TEAR_STRENGTH = .6         // 0..1 how “on” the tear is during a beat pulse
 
 // Beat -> tear pulse shaping
 BEAT_ENABLE = 1
-BEAT_SENS = 1.4          // higher = fewer triggers
+BEAT_SENS = 1.6           // higher = fewer triggers
 BEAT_FLOOR = 0.015        // ignore bass under this
 BEAT_MIN_GAP = 0.14    // seconds between beat triggers
 TEAR_PULSE_SEC = 0.12  // tear visibility duration per beat
 
 // Explode glitch (particles)
 ENABLE_EXPLODE = 1
-EXPLODE_RATE = 0.15
+EXPLODE_RATE = 0.5 
 PARTICLE_COUNT = 20
 PARTICLE_TTL = 0.75
 PARTICLE_VAL = 0.65
