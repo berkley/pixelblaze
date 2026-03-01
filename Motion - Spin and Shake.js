@@ -3,19 +3,33 @@
 */
 
 export var accelerometer
+export var shakeThresh
+export var explodeDecay
+export var explodeAmount
+export var sensitivity
 
 var sensitivity = 100
 export function sliderSensitivity(v) {
   sensitivity = 10 + v * 490
 }
 
-// Shake detection
-SHAKE_THRESH = 5     // times above baseline magnitude to trigger (tune if needed)
-SHAKE_COOLDOWN = 1.0   // seconds before re-triggering
-EXPLODE_AMT_MAX = .7
+var shakeThresh = 5
+export function sliderShakeThreshold(v) {
+  shakeThresh = v * 5
+}
 
-// Explosion
-EXPLODE_DECAY = 2.5    // seconds to fade out
+var explodeDecay = 2.5
+export function sliderExplodeDecay(v) {
+  explodeDecay = v * 5
+}
+
+var explodeAmount = 1
+export function sliderExplodeAmount(v) {
+  explodeAmount = v * 1
+}
+
+// Shake detection
+SHAKE_COOLDOWN = 1.0   // seconds before re-triggering
 
 pos = 0
 smoothAx = 0
@@ -38,8 +52,8 @@ export function beforeRender(delta) {
   smoothMag = mix(smoothMag, mag, 0.02)
   shakeCooldown = max(0, shakeCooldown - dt)
 
-  if (shakeCooldown <= 0 && mag > smoothMag * SHAKE_THRESH) {
-    explodeAmt = EXPLODE_AMT_MAX
+  if (shakeCooldown <= 0 && mag > smoothMag * shakeThresh) {
+    explodeAmt = explodeAmount
     explodePhase = random(1)    // random hue offset each explosion
     shakeCooldown = SHAKE_COOLDOWN
   }
@@ -47,7 +61,7 @@ export function beforeRender(delta) {
   // Rainbow spins faster at peak, slows as it fades
   explodePhase = mod(explodePhase + explodeAmt * dt * 0.5, 1)
 
-  explodeAmt = max(0, explodeAmt - dt / EXPLODE_DECAY)
+  explodeAmt = max(0, explodeAmt - dt / explodeDecay)
 }
 
 export function render(index) {
