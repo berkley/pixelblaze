@@ -1,22 +1,20 @@
-/*
-  Spin cycle - Accelerometer controlled
-  X-axis tilt controls spin direction and speed.
-  Level (X = 0) = stopped. Tilt to spin.
-*/
+export var accelerometer
+export var smoothAx
+export var pos
+
+var sensitivity = 100  // lower = faster. Tune to taste.
+
+export function sliderSensitivity(v) {
+  sensitivity = 10 + v * 490  // slider maps 0..1 to range 10..500
+}
 
 pos = 0
 smoothAx = 0
 
 export function beforeRender(delta) {
-  // Smooth the raw accelerometer to reduce jitter
-  smoothAx = lerp(smoothAx, accelerometer[0], 0.1)
-
-  // smoothAx = sin(tilt angle): 0 = level/stopped, ±1 = 90° tilt = max speed
-  // Dividing by 6553.6 makes ax=1 match the original time(0.1) cycle rate
-  pos = pos + smoothAx * delta / 6553.6
-  pos = pos % 1
-  if (pos < 0) pos = pos + 1  // % can return negative in Pixelblaze
-
+  smoothAx = mix(smoothAx, accelerometer[1], 0.1)
+  pos = pos + smoothAx * delta / sensitivity
+  pos = mod(pos, 1)
   t1 = pos
 }
 
