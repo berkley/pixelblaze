@@ -1,0 +1,30 @@
+/*
+  Spin cycle - Accelerometer controlled
+  X-axis tilt controls spin direction and speed.
+  Level (X = 0) = stopped. Tilt to spin.
+*/
+
+pos = 0
+smoothAx = 0
+
+export function beforeRender(delta) {
+  // Smooth the raw accelerometer to reduce jitter
+  smoothAx = lerp(smoothAx, accelerometer[0], 0.1)
+
+  // smoothAx = sin(tilt angle): 0 = level/stopped, ±1 = 90° tilt = max speed
+  // Dividing by 6553.6 makes ax=1 match the original time(0.1) cycle rate
+  pos = pos + smoothAx * delta / 6553.6
+  pos = pos % 1
+  if (pos < 0) pos = pos + 1  // % can return negative in Pixelblaze
+
+  t1 = pos
+}
+
+export function render(index) {
+  pct = index / pixelCount
+  h = pct * (5 * wave(t1) + 5) + 2 * wave(t1)
+  h = h % .5 + t1
+  v = triangle(5 * pct + 10 * t1)
+  v = v * v * v
+  hsv(h, 1, v)
+}
