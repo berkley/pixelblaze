@@ -8,11 +8,11 @@
   - Background glitches:
       * random sparkles
       * occasional short horizontal streaks
-      * NEW: "digital tearing" bands (random rows shifted in X for a moment)
+      * NEW: "digital tearing" bands (random rows shifted in X for H moment)
 */
 
 W = 8
-A = 32
+H = 32
 S = 4
 maxH = W - S
 
@@ -75,12 +75,12 @@ export function sliderTearSat(v) {
 }
 
 function wrap01(v) { return v - floor(v) }
-function wrapA(v) { return (v % A + A) % A }
+function wrapA(v) { return (v % H + H) % H }
 
 function wrapDxSigned(a, b) {
   d = a - b
-  if (d >  A * 0.5) d -= A
-  if (d < -A * 0.5) d += A
+  if (d >  H * 0.5) d -= H
+  if (d < -H * 0.5) d += H
   return d
 }
 
@@ -316,7 +316,7 @@ export function render2D(index, x, y) {
   rr = hash01(gFrame * 13.0 + 5.0)
   rs = hash01(gFrame * 17.0 + 11.0)
   rowPick = floor(rr * W)
-  streakCenter = floor(rs * A)
+  streakCenter = floor(rs * H)
   dxs = abs(wrapDxSigned(around, streakCenter))
   streak = (h == rowPick && dxs <= 2) ? 1 : 0
   if (streak) gAmt = max(gAmt, glitchVal * 0.7)

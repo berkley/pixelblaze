@@ -1,16 +1,10 @@
 /*
   CYLINDER BOXES ENGINE (32 around x 8 tall, zigzag-wired height=8) + SOUND REACTIVE
-  Change applied:
-  - Tear band color is RANDOM (not linked to dominant frequency)
-  - Hue behavior is configurable via TEAR_HUE_MODE / TEAR_HUE / TEAR_HUE_SPAN
-  Everything else is unchanged.
+  Boxes bounce around, coliding and rebounding off of each other.  Some of them explode.  Sound will add 
+  colored bands throughout the animation.  The color is dependent on the frequency of the sound.  
 */
 
-/////////////////////
-// CORE CONFIG
-/////////////////////
-
-A = 32
+H= 32
 W = 8
 
 // boxes
@@ -145,12 +139,12 @@ inited = 0
 /////////////////////
 
 function wrap01(v) { return v - floor(v) }
-function wrapA(v) { return (v % A + A) % A }
+function wrapA(v) { return (v % H + H) % H}
 
 function wrapDxSigned(a, b) {
   d = a - b
-  if (d >  A * 0.5) d -= A
-  if (d < -A * 0.5) d += A
+  if (d >  H * 0.5) d -= H
+  if (d < -H * 0.5) d += H
   return d
 }
 
@@ -427,7 +421,7 @@ function initIfNeeded() {
     m[i] = randRange(MASS_MIN, MASS_MAX)
     invM[i] = 1 / m[i]
 
-    ax[i] = wrapA((A / BOX_COUNT) * i + random(1) * 0.5)
+    ax[i] = wrapA((H / BOX_COUNT) * i + random(1) * 0.5)
     hy[i] = randRange(0, (W - bs[i]) > 0 ? (W - bs[i]) : 0)
 
     ang = (i / BOX_COUNT) * PI2
