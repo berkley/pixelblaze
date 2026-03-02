@@ -1,9 +1,11 @@
-// POV Smiley Face
+// POV Smiley Face — Accelerometer-driven
 // Persistence of vision pattern for a spinning staff with 59 pixels.
-// When you spin the staff, a yellow smiley face appears in the air.
+// Uses the accelerometer to track spin angle and measure speed.
+// Brightness scales with spin speed to compensate for POV duty cycle.
 //
-// Uses the accelerometer to track spin and determine angular position.
-// Sensitivity slider tunes how responsive the rotation tracking is.
+// Note: This pattern uses render(index) rather than render2D because
+// the physical radial position (distance from staff center) is needed
+// for the filled face, which the ring pixel map doesn't provide.
 
 export var accelerometer
 
@@ -20,7 +22,7 @@ var mouthCY = 0.05      // Mouth arc center, just below face center
 var mouthR1 = 0.15      // Mouth arc inner radius
 var mouthR2 = 0.30      // Mouth arc outer radius
 
-// Accelerometer-driven rotation
+// Accelerometer rotation tracking
 var sensitivity = 100
 export function sliderSensitivity(v) {
   sensitivity = 10 + v * 490
@@ -28,13 +30,24 @@ export function sliderSensitivity(v) {
 
 var pos = 0
 var smoothAx = 0
+var spinSpeed = 0
+var bright = 1
 var angle
 
 export function beforeRender(delta) {
+  // Track spin angle from accelerometer
   smoothAx = mix(smoothAx, accelerometer[1], 0.1)
-  pos = pos + smoothAx * delta / sensitivity
+  pos += smoothAx * delta / sensitivity
   pos = mod(pos, 1)
   angle = pos * PI2
+
+  // Measure spin speed (smoothed magnitude of accelerometer)
+  spinSpeed = mix(spinSpeed, abs(accelerometer[1]), 0.05)
+
+  // Brightness scales with speed: dim when still, bright when spinning fast.
+  // This compensates for the POV duty cycle — faster spin means each pixel
+  // is visible for less time, so it needs to be brighter.
+  bright = clamp(0.2 + spinSpeed * 3, 0.2, 1)
 }
 
 export function render(index) {
@@ -50,9 +63,8 @@ export function render(index) {
   var x = r * cos(a)
   var y = r * sin(a)
 
-  // Outside face circle - pixel off
-  var d2 = x * x + y * y
-  if (d2 > faceR * faceR) {
+  // Outside face circle — pixel off
+  if (x * x + y * y > faceR * faceR) {
     rgb(0, 0, 0)
     return
   }
@@ -73,7 +85,7 @@ export function render(index) {
     return
   }
 
-  // Mouth: arc below center, closer to middle of face
+  // Mouth: arc below center
   dy = y + mouthCY
   var md2 = x * x + dy * dy
   if (md2 > mouthR1 * mouthR1 && md2 < mouthR2 * mouthR2 && y < -mouthCY) {
@@ -81,6 +93,6 @@ export function render(index) {
     return
   }
 
-  // Inside face - yellow
-  rgb(1, 0.8, 0)
+  // Yellow face — brightness scales with spin speed
+  rgb(bright, bright * 0.8, 0)
 }
