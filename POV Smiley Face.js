@@ -2,9 +2,10 @@
 // Persistence of vision pattern for a spinning staff with 59 pixels.
 // When you spin the staff, a yellow smiley face appears in the air.
 //
-// Use the Speed slider to match the animation rate to your spin speed.
-// The face is rendered geometrically: yellow circle with black eyes and
-// a black arc mouth.
+// Uses the accelerometer to track spin and determine angular position.
+// Sensitivity slider tunes how responsive the rotation tracking is.
+
+export var accelerometer
 
 var center = floor(pixelCount / 2)
 var maxR = max(center, 1)
@@ -15,21 +16,25 @@ var faceR = 0.88        // Face circle radius
 var eyeR = 0.13         // Eye radius
 var eyeX = 0.3          // Eye horizontal offset from center
 var eyeY = 0.28         // Eye vertical offset above center
-var mouthCY = 0.12      // Mouth arc center, below face center
-var mouthR1 = 0.25      // Mouth arc inner radius
-var mouthR2 = 0.42      // Mouth arc outer radius
+var mouthCY = 0.05      // Mouth arc center, just below face center
+var mouthR1 = 0.15      // Mouth arc inner radius
+var mouthR2 = 0.30      // Mouth arc outer radius
 
-// Rotation speed - adjust with slider to match your actual spin rate
-var speed = 0.03
-
-export function sliderSpeed(v) {
-  speed = 0.01 + v * 0.08
+// Accelerometer-driven rotation
+var sensitivity = 100
+export function sliderSensitivity(v) {
+  sensitivity = 10 + v * 490
 }
 
+var pos = 0
+var smoothAx = 0
 var angle
 
 export function beforeRender(delta) {
-  angle = time(speed) * PI2
+  smoothAx = mix(smoothAx, accelerometer[1], 0.1)
+  pos = pos + smoothAx * delta / sensitivity
+  pos = mod(pos, 1)
+  angle = pos * PI2
 }
 
 export function render(index) {
@@ -68,7 +73,7 @@ export function render(index) {
     return
   }
 
-  // Mouth: arc below center
+  // Mouth: arc below center, closer to middle of face
   dy = y + mouthCY
   var md2 = x * x + dy * dy
   if (md2 > mouthR1 * mouthR1 && md2 < mouthR2 * mouthR2 && y < -mouthCY) {
