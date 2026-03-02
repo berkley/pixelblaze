@@ -19,7 +19,7 @@
 /////////////////////
 
 //matrix size - 32x8 array wrapped around a cylinder
-A            = 32         // around
+H            = 32         // around
 W            = 8          // tall
 
 //box variables
@@ -103,15 +103,15 @@ inited = 0
 /////////////////////
 
 function wrap01(v) { return v - floor(v) }
-function wrapA(v) { return (v % A + A) % A }
+function wrapA(v) { return (v % H + H) % H }
 
 function clamp01(v) { return clamp(v, 0, 1) }
 
 // signed shortest difference a-b on [0,A)
 function wrapDxSigned(a, b) {
   d = a - b
-  if (d >  A * 0.5) d -= A
-  if (d < -A * 0.5) d += A
+  if (d >  H * 0.5) d -= H
+  if (d < -H * 0.5) d += H
   return d
 }
 
@@ -239,7 +239,7 @@ function collide(i, j) {
 
 function spawnBurst() {
   // pick random center
-  cx = floor(random(A))
+  cx = floor(random(H))
   cy = floor(random(W))
   baseHue = random(1)
 
@@ -331,7 +331,7 @@ function initIfNeeded() {
     invM[i] = 1 / m[i]
 
     // spread them around; keep within vertical range
-    ax[i] = wrapA((A / BOX_COUNT) * i + random(1) * 0.5)
+    ax[i] = wrapA((H / BOX_COUNT) * i + random(1) * 0.5)
     hy[i] = randRange(0, (W - bs[i]) > 0 ? (W - bs[i]) : 0)
 
     ang = (i / BOX_COUNT) * PI2
