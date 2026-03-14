@@ -227,7 +227,7 @@ export function beforeRender(delta) {
 
 export function render(index) {
   if (index == CENTER) {
-    hsv(0, 0, 1)
+    hsv(1, saturation, .2)
   } else {
     hsv(pixH[index], saturation, pixV[index])
   }
