@@ -27,6 +27,19 @@ export function sliderMaxPulses(v) {
   maxPulses = floor(4 + v * 20)
 }
 
+// Axis pair for spin detection: 0-0.33 = XY, 0.34-0.66 = XZ, 0.67-1 = YZ
+var axisA = 0
+var axisB = 1
+export function sliderAxis(v) {
+  if (v < 0.33) {
+    axisA = 0; axisB = 1
+  } else if (v < 0.66) {
+    axisA = 0; axisB = 2
+  } else {
+    axisA = 1; axisB = 2
+  }
+}
+
 // --- Constants ---
 CENTER = 29
 NUM = 59
@@ -59,7 +72,7 @@ export function beforeRender(delta) {
   dt = delta / 1000
 
   // Compute angle of acceleration vector in XY plane
-  angle = atan2(accelerometer[1], accelerometer[0])
+  angle = atan2(accelerometer[axisB], accelerometer[axisA])
 
   if (initialized) {
     da = angle - prevAngle
