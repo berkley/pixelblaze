@@ -40,6 +40,16 @@ export function sliderAxis(v) {
   }
 }
 
+var shakeThreshold = 0.02
+export function sliderShakeThreshold(v) {
+  shakeThreshold = 0.001 + v * 0.099
+}
+
+var shakeReset = 2
+export function sliderShakeReset(v) {
+  shakeReset = 0.5 + v * 4.5
+}
+
 // --- Constants ---
 CENTER = 29
 NUM = 59
@@ -58,6 +68,9 @@ pAct = array(POOL)
 pixH = array(NUM)
 pixV = array(NUM)
 
+// Per-pulse direction: 0 = both sides, -1 = left only, 1 = right only
+pDir = array(POOL)
+
 // --- Spin detection state ---
 prevAngle = 0
 smoothSpin = 0
@@ -67,6 +80,13 @@ idleSpawnAccum = 0
 
 // Activity level: 1 = spinning, 0 = idle
 activity = 0
+
+// --- Shake detection state ---
+prevAx = 0; prevAy = 0; prevAz = 0
+shakeEnergy = 0
+shakeDuration = 0
+shakeCooldown = 0
+explosionActive = 0
 
 export function beforeRender(delta) {
   dt = delta / 1000
@@ -97,6 +117,60 @@ export function beforeRender(delta) {
 
   idle = 1 - activity
 
+  // --- Shake detection ---
+  // Measure how much acceleration is changing frame-to-frame
+  ax = accelerometer[0]; ay = accelerometer[1]; az = accelerometer[2]
+  dx = ax - prevAx; dy = ay - prevAy; dz = az - prevAz
+  jerk = dx * dx + dy * dy + dz * dz
+  prevAx = ax; prevAy = ay; prevAz = az
+
+  // Smooth the shake energy signal
+  shakeEnergy = mix(shakeEnergy, jerk, 0.3)
+
+  // Track sustained shaking duration
+  if (shakeCooldown > 0) {
+    shakeCooldown -= dt
+  } else if (shakeEnergy > shakeThreshold) {
+    shakeDuration += dt
+  } else {
+    shakeDuration = max(0, shakeDuration - dt * shakeReset)
+  }
+
+  // Trigger explosion after 3 seconds of sustained shaking
+  if (shakeDuration >= 3 && shakeCooldown <= 0) {
+    // Determine shake direction along the strip axis
+    // Use the dominant acceleration axis to pick a direction
+    shakeDir = 0
+    absX = abs(ax); absY = abs(ay); absZ = abs(az)
+    dominant = ax
+    if (absY > absX && absY > absZ) dominant = ay
+    if (absZ > absX && absZ > absY) dominant = az
+    if (dominant > 0.1) shakeDir = 1
+    if (dominant < -0.1) shakeDir = -1
+
+    // Spawn a burst of pulses filling the pool
+    for (j = 0; j < POOL; j++) {
+      pPos[j] = 0
+      pOrb[j] = random(NUM)
+      pHue[j] = random(1)
+      pBri[j] = 1
+      pAct[j] = 1
+      pDir[j] = shakeDir
+    }
+
+    // Force activity high so they render radially
+    activity = 1
+    explosionActive = 1
+    shakeDuration = 0
+    shakeCooldown = 4
+  }
+
+  // Decay explosion state
+  if (explosionActive > 0) {
+    explosionActive = max(0, explosionActive - dt * 0.5)
+    activity = max(activity, explosionActive)
+  }
+
   // --- Active mode: spawn radial pulses from center ---
   spawnRate = clamp(force * 0.8, 0, 12)
   spawnAccum += spawnRate * dt
@@ -111,6 +185,7 @@ export function beforeRender(delta) {
         pHue[j] = random(1)
         pBri[j] = 1
         pAct[j] = 1
+        pDir[j] = 0
         break
       }
     }
@@ -128,6 +203,7 @@ export function beforeRender(delta) {
         pHue[j] = random(1)
         pBri[j] = 1
         pAct[j] = 1
+        pDir[j] = 0
         break
       }
     }
@@ -184,21 +260,25 @@ export function beforeRender(delta) {
         if (falloff <= 0) continue
         intensity = radBri * falloff * falloff
 
-        // Left side of center
-        idx = CENTER - floor(pos + 0.5) + k
-        if (idx >= 0 && idx < NUM) {
-          if (intensity > pixV[idx]) {
-            pixH[idx] = h
-            pixV[idx] = intensity
+        // Left side of center (skip if direction is right-only)
+        if (pDir[j] <= 0) {
+          idx = CENTER - floor(pos + 0.5) + k
+          if (idx >= 0 && idx < NUM) {
+            if (intensity > pixV[idx]) {
+              pixH[idx] = h
+              pixV[idx] = intensity
+            }
           }
         }
 
-        // Right side of center
-        idx = CENTER + floor(pos + 0.5) + k
-        if (idx >= 0 && idx < NUM && floor(pos + 0.5) > 0) {
-          if (intensity > pixV[idx]) {
-            pixH[idx] = h
-            pixV[idx] = intensity
+        // Right side of center (skip if direction is left-only)
+        if (pDir[j] >= 0) {
+          idx = CENTER + floor(pos + 0.5) + k
+          if (idx >= 0 && idx < NUM && floor(pos + 0.5) > 0) {
+            if (intensity > pixV[idx]) {
+              pixH[idx] = h
+              pixV[idx] = intensity
+            }
           }
         }
       }
