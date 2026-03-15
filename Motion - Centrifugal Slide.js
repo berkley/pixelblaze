@@ -40,6 +40,16 @@ export function sliderAxis(v) {
   }
 }
 
+var shakeThreshold = 0.02
+export function sliderShakeThreshold(v) {
+  shakeThreshold = 0.001 + v * 0.099
+}
+
+var shakeReset = 2
+export function sliderShakeReset(v) {
+  shakeReset = 0.5 + v * 4.5
+}
+
 // --- Constants ---
 CENTER = 29
 NUM = 59
@@ -120,10 +130,10 @@ export function beforeRender(delta) {
   // Track sustained shaking duration
   if (shakeCooldown > 0) {
     shakeCooldown -= dt
-  } else if (shakeEnergy > 0.02) {
+  } else if (shakeEnergy > shakeThreshold) {
     shakeDuration += dt
   } else {
-    shakeDuration = max(0, shakeDuration - dt * 2)
+    shakeDuration = max(0, shakeDuration - dt * shakeReset)
   }
 
   // Trigger explosion after 3 seconds of sustained shaking
