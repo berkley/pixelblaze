@@ -5,71 +5,84 @@
   with the SB 1.0 sensor expansion board.
 
   - Low-frequency beats spawn colored horizontal bands that start at the
-    bottom panel and travel up the four side walls. Hue is set by the
-    dominant bass FFT bin (bin 0 = pure red, working toward yellow).
-  - High-frequency beats spawn vertical "curtain" bands that sweep around
-    the cube longitudinally. Hue is set by the dominant treble bin (low
-    end = cyan, top end = magenta).
+    bottom panel and travel up the four side walls. Hue tracks the
+    dominant bass FFT bin (bin 0 = red → bin 7 = yellow-orange).
+  - High-frequency beats spawn vertical "curtain" bands that sweep
+    around the cube longitudinally. Hue tracks the dominant treble bin
+    (bin 20 = cyan → bin 31 = magenta).
 
-  Motion speed for both band types is locked to a running BPM estimate
-  derived from the gap between detected bass beats.
+  Motion speed follows a running BPM estimate from inter-beat intervals.
 
-  The SB 1.0 emits tiny FFT magnitudes (often well under 0.01 even on
-  loud music). Rather than fight that with a fixed gain, we track each
-  band's recent rolling average AND recent peak, and report each beat as
-  a fraction of that dynamic range. So `bassSpike` is dimensionless and
-  in roughly 0..1: 0 means current ≈ recent average, 1 means current ≈
-  recent peak. Thresholds work across any signal scale.
+  Performance notes (matters at 1280 pixels):
+  - atan2 / rxy fall-off are cached per pixel after the first frame.
+  - Every band's color, 1/width, and angular trig is precomputed once
+    per frame in beforeRender.
+  - Sweeping bands use a cos(angle-diff) = dot-product test instead of
+    a floor()-based angle wrap, so the inner loop is branch-light.
 */
 
-export var sliderBassSensitivity   = 0.6   // higher = more bass bands
-export var sliderTrebleSensitivity = 0.6   // higher = more treble bands
+export var sliderBassSensitivity   = 0.6
+export var sliderTrebleSensitivity = 0.6
 export var sliderBassWidth         = 0.4
 export var sliderTrebleWidth       = 0.4
 export var sliderBrightness        = 0.9
-export var sliderTestMode          = 0     // > 0: spawn bands on a timer (no audio)
+export var sliderTestMode          = 0
 
 // ---- Sensor board inputs ----
-// Set by the SB firmware. If `light` stays at -1 we know no board is
-// attached and fall back to a simulated audio signal.
 export var light            = -1
 export var frequencyData    = array(32)
 export var energyAverage    = 0
 
-// ---- Diagnostic exports (visible in Vars Watch for tuning) ----
+// ---- Diagnostic exports ----
 export var bassNow        = 0
 export var trebleNow      = 0
 export var bassAvg        = 0
 export var trebleAvg      = 0
 export var bassPeak       = 0
 export var treblePeak     = 0
-export var bassSpike      = 0   // 0..~1, normalized to recent dynamic range
+export var bassSpike      = 0
 export var trebleSpike    = 0
 export var bassBeatThresh = 0
 export var detectedBpm    = 120
 
-// ---- Band pool ----
-maxBands   = 16
+// ---- Band pool (reduced from 16 → 10 for perf) ----
+maxBands   = 10
 bandType   = array(maxBands)
 bandHue    = array(maxBands)
 bandAge    = array(maxBands)
 bandLife   = array(maxBands)
-bandPos    = array(maxBands)
+bandPos    = array(maxBands)   // z for rising, theta for sweeping
 bandVel    = array(maxBands)
 bandWidth  = array(maxBands)
 bandActive = array(maxBands)
 
+// Per-band per-frame precomputes (set in beforeRender).
+bandR           = array(maxBands)   // color × fade × brightness
+bandG           = array(maxBands)
+bandB           = array(maxBands)
+bandInvWidth    = array(maxBands)
+bandCos         = array(maxBands)
+bandSin         = array(maxBands)
+bandWidthCos    = array(maxBands)
+bandInvCosDelta = array(maxBands)
+
 for (i = 0; i < maxBands; i++) bandActive[i] = 0
+
+// ---- Per-pixel cache. The map is fixed, so atan2 and the radial
+// fall-off only need to be computed once per pixel for the lifetime of
+// the pattern. We lazy-fill on the first call per index.
+pxCos    = array(pixelCount)
+pxSin    = array(pixelCount)
+pxRxy    = array(pixelCount)
+pxCached = array(pixelCount)
+for (i = 0; i < pixelCount; i++) pxCached[i] = 0
 
 // ---- Beat / timing state ----
 lastBassBeat   = -10
 lastTrebleBeat = -10
 elapsed        = 0
 beatPeriod     = 0.5
-
-hasRising   = 0
-hasSweeping = 0
-testAccum   = 0
+testAccum      = 0
 
 function findFreeBand() {
   for (i = 0; i < maxBands; i++) {
@@ -122,7 +135,7 @@ function h2rgb(h, v) {
   else              { hr = v; hg = 0; hb = q }
 }
 
-// Simulated audio if no SB is attached.
+// Simulated audio fallback for use without the SB.
 simBpm     = 120
 simMeasure = 4 * 60 / simBpm / 65.536
 
@@ -158,37 +171,27 @@ export function beforeRender(delta) {
   for (i = 20; i < 32; i++) trebleNow += frequencyData[i]
   trebleNow *= 1 / 12
 
-  // ---- Rolling baselines ----
-  // Slow average over ~2s gives a "calm" reference. Beats sit above it.
+  // ---- Rolling baseline + slow-decay peak per band ----
   dw = delta / 2000
   bassAvg   = bassAvg   * (1 - dw) + bassNow   * dw
   trebleAvg = trebleAvg * (1 - dw) + trebleNow * dw
 
-  // ---- Recent peaks (slow decay, jump to match new highs) ----
-  // Tracks the loudest energy in the last ~1.5s in each band. Together
-  // with the running average this defines the local dynamic range.
   bassPeak   = bassPeak   * 0.997
   treblePeak = treblePeak * 0.997
   if (bassNow   > bassPeak)   bassPeak   = bassNow
   if (trebleNow > treblePeak) treblePeak = trebleNow
 
-  // ---- Normalized spike: where in [avg .. peak] is `now`? ----
-  // Floors on the denominator keep things sane during startup / true
-  // silence (when peak ≈ avg ≈ 0).
   bassDyn   = max(max(bassPeak   - bassAvg,   bassPeak   * 0.2), 0.00005)
   trebleDyn = max(max(treblePeak - trebleAvg, treblePeak * 0.2), 0.00005)
 
   bassSpike   = max(0, bassNow   - bassAvg)   / bassDyn
   trebleSpike = max(0, trebleNow - trebleAvg) / trebleDyn
 
-  // ---- Thresholds: fraction of dynamic range required to trigger ----
-  // Sensitivity slider at 0.5 sits in the middle of the band.
-  bassBeatThresh   = 0.65 - sliderBassSensitivity   * 0.40   // 0.25..0.65
-  trebleBeatThresh = 0.55 - sliderTrebleSensitivity * 0.35   // 0.20..0.55
+  bassBeatThresh   = 0.65 - sliderBassSensitivity   * 0.40
+  trebleBeatThresh = 0.55 - sliderTrebleSensitivity * 0.35
 
   minGap = 60 / 220
 
-  // ---- Bass beat ----
   if (bassSpike > bassBeatThresh && elapsed - lastBassBeat > minGap) {
     peakBin = 0
     peakVal = frequencyData[0]
@@ -209,7 +212,6 @@ export function beforeRender(delta) {
     lastBassBeat = elapsed
   }
 
-  // ---- Treble beat ----
   if (trebleSpike > trebleBeatThresh &&
       elapsed - lastTrebleBeat > minGap * 0.5) {
     peakBin = 20
@@ -222,7 +224,6 @@ export function beforeRender(delta) {
     lastTrebleBeat = elapsed
   }
 
-  // ---- Test mode (audio-independent diagnostic) ----
   if (sliderTestMode > 0) {
     testAccum += dt
     testInterval = 0.15 + (1 - sliderTestMode) * 1.0
@@ -236,62 +237,84 @@ export function beforeRender(delta) {
     }
   }
 
-  // ---- Advance bands ----
-  hasRising   = 0
-  hasSweeping = 0
+  // ---- Advance bands AND precompute their render-time constants ----
   for (i = 0; i < maxBands; i++) {
     if (bandActive[i]) {
       bandAge[i] += dt
       bandPos[i] += bandVel[i] * dt
       if (bandAge[i] >= bandLife[i]) {
         bandActive[i] = 0
+        bandR[i] = 0; bandG[i] = 0; bandB[i] = 0
       } else {
-        if (bandType[i] == 0) hasRising   = 1
-        else                  hasSweeping = 1
+        p = bandAge[i] / bandLife[i]
+        // Hold full for first third of life, then linear taper.
+        fade = clamp((1 - p) * 1.5, 0, 1) * sliderBrightness
+        h2rgb(bandHue[i], fade)
+        bandR[i] = hr
+        bandG[i] = hg
+        bandB[i] = hb
+        bandInvWidth[i] = 1 / bandWidth[i]
+        if (bandType[i] == 1) {
+          // Sweeping: precompute cos/sin of position and cos of width.
+          bandCos[i] = cos(bandPos[i])
+          bandSin[i] = sin(bandPos[i])
+          wc = cos(bandWidth[i])
+          bandWidthCos[i]    = wc
+          bandInvCosDelta[i] = 1 / max(1 - wc, 0.0001)
+        }
       }
     }
   }
 }
 
 export function render3D(index, x, y, z) {
-  r = 0; g = 0; b = 0
-
-  pxAng = 0
-  rxyWeight = 0
-  if (hasSweeping) {
+  // ---- One-shot per-pixel cache ----
+  if (!pxCached[index]) {
     cx = x - 0.5
     cy = y - 0.5
-    pxAng = atan2(cy, cx)
     rxy2 = cx * cx + cy * cy
-    rxyWeight = clamp(rxy2 * 6, 0, 1)
+    rxy  = sqrt(rxy2)
+    if (rxy > 0.0001) {
+      pxCos[index] = cx / rxy
+      pxSin[index] = cy / rxy
+    } else {
+      pxCos[index] = 1
+      pxSin[index] = 0
+    }
+    pxRxy[index]    = clamp(rxy2 * 6, 0, 1)
+    pxCached[index] = 1
   }
+  pCos = pxCos[index]
+  pSin = pxSin[index]
+  pRxy = pxRxy[index]
+
+  r = 0; g = 0; b = 0
 
   for (i = 0; i < maxBands; i++) {
     if (bandActive[i]) {
-      p = bandAge[i] / bandLife[i]
-      fade = clamp((1 - p) * 1.5, 0, 1)
-
       if (bandType[i] == 0) {
+        // Rising band.
         dist = abs(z - bandPos[i])
         if (dist < bandWidth[i]) {
-          bri = (1 - dist / bandWidth[i]) * fade
-          h2rgb(bandHue[i], bri)
-          r += hr; g += hg; b += hb
+          bri = 1 - dist * bandInvWidth[i]
+          r += bandR[i] * bri
+          g += bandG[i] * bri
+          b += bandB[i] * bri
         }
       } else {
-        ad = pxAng - bandPos[i]
-        ad = ad - 2 * PI * floor((ad + PI) / (2 * PI))
-        ad = abs(ad)
-        if (ad < bandWidth[i]) {
-          bri = (1 - ad / bandWidth[i]) * fade * rxyWeight
-          h2rgb(bandHue[i], bri)
-          r += hr; g += hg; b += hb
+        // Sweeping band: dot product = cos(angle-diff).
+        dotp = pCos * bandCos[i] + pSin * bandSin[i]
+        if (dotp > bandWidthCos[i]) {
+          bri = (dotp - bandWidthCos[i]) * bandInvCosDelta[i] * pRxy
+          r += bandR[i] * bri
+          g += bandG[i] * bri
+          b += bandB[i] * bri
         }
       }
     }
   }
 
-  rgb(r * sliderBrightness, g * sliderBrightness, b * sliderBrightness)
+  rgb(r, g, b)
 }
 
 export function render2D(index, x, y) {
