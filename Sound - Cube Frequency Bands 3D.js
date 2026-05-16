@@ -18,11 +18,22 @@
   Requires the SB sensor board so frequencyData[] is populated.
 */
 
-export var sliderBassSensitivity   = 0.5
-export var sliderTrebleSensitivity = 0.5
+export var sliderBassSensitivity   = 0.7
+export var sliderTrebleSensitivity = 0.7
 export var sliderBassWidth         = 0.4   // thickness of rising bands
 export var sliderTrebleWidth       = 0.4   // angular width of sweeping bands
 export var sliderBrightness        = 0.9
+export var sliderTestMode          = 0     // > 0 spawns bands on a timer (no audio needed)
+
+// Diagnostic outputs — visible in Vars Watch while running. Use them to
+// tune sensitivity: watch `bassNow` while music plays, compare to
+// `bassThresh`. If `bassNow` never reaches `bassThresh`, audio isn't
+// hot enough — drop sensitivity slider or check the SB gain.
+export var bassNow      = 0
+export var trebleNow    = 0
+export var bassThresh   = 0
+export var trebleThresh = 0
+export var detectedBpm  = 120
 
 // Audio inputs populated by the sensor expansion board. They must be
 // declared as exported variables so the firmware can write into them.
