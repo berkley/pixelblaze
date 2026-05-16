@@ -5,26 +5,21 @@
   the 3D fire field at its own (x, y, z), so the five panels read like
   windows looking in at a fireball suspended in the middle of the box.
 
-  The field is a soft radial core (hottest at the cube center) modulated by
-  three multiplied wave fields — same trick as the stock "Cube fire 3D"
-  example — but with one of the time offsets coupled to z so the internal
-  structure flows continuously upward.
-
-  Bright white sparks spawn near the core and shoot upward (toward z = 0,
-  the open top). Each spark is a moving 3D point; pixels light up white
-  when they fall inside its 3D falloff radius — so as a spark drifts from
-  the center toward a wall, it focuses into a sharp moving dot on that
-  wall before exiting through the top.
+  Bright white embers spawn near the core, shoot off in random (mostly
+  upward) directions, arc under "gravity", and leave a short fading
+  trail of single-pixel dots behind them. The falloff radius is small
+  enough that each trail point only lights the closest pixel or two.
 */
 
 export var sliderIntensity  = 0.7
 export var sliderSize       = 0.5   // radius of the central flame
 export var sliderTurbulence = 0.5   // amount of internal flame structure
 export var sliderRise       = 0.5   // upward flow rate
-export var sliderSparks     = 0.5   // spark frequency
+export var sliderSparks     = 0.5   // ember frequency
 
 // Cube convention from the pixel map: z = 1 is the bottom panel, z = 0 is
-// the (missing) top, so "rising" means moving toward smaller z.
+// the (missing) top, so "rising" means moving toward smaller z and
+// gravity pulls toward larger z.
 
 t1 = 0
 t2 = 0
@@ -35,49 +30,86 @@ turbAmt = 0.7
 turbBase = 0.3
 flick = 1
 
-// Spark state — flat parallel arrays for fast indexing in render3D.
-maxSparks = 8
-spx     = array(maxSparks)
-spy     = array(maxSparks)
-spz     = array(maxSparks)
-spvx    = array(maxSparks)
-spvy    = array(maxSparks)
-spvz    = array(maxSparks)
-spage   = array(maxSparks)
-splife  = array(maxSparks)
-spamp   = array(maxSparks)   // current brightness (0 = inactive, contributes nothing)
+// ---- Embers ----
+// Each spark keeps a history of the last `trailLen` positions so the
+// rendered ember has a fading tail. Stored as flat parallel arrays so
+// the inner loop in render3D is one straight pass over `slots` entries.
+maxSparks = 6
+trailLen  = 6
+slots     = maxSparks * trailLen   // 36
 
-for (i = 0; i < maxSparks; i++) {
-  spamp[i]  = 0
-  spage[i]  = 1
-  splife[i] = 1
-}
+trailX   = array(slots)
+trailY   = array(slots)
+trailZ   = array(slots)
+trailAmp = array(slots)            // 0 = dark; 1+ = visible
+
+sparkVx     = array(maxSparks)
+sparkVy     = array(maxSparks)
+sparkVz     = array(maxSparks)
+sparkAge    = array(maxSparks)
+sparkLife   = array(maxSparks)
+sparkActive = array(maxSparks)
+
+for (i = 0; i < slots; i++) trailAmp[i] = 0
+for (i = 0; i < maxSparks; i++) sparkActive[i] = 0
+
+shiftAccum = 0
+shiftPeriod = 0.06   // seconds between trail snapshots — sets trail spacing
+trailDecay  = 0.65   // brightness multiplier each shift
 
 function spawnSpark(i) {
-  // Born near the cube center with a small jitter so they don't all
-  // emerge from exactly the same point.
-  spx[i] = 0.5 + (random(1) - 0.5) * 0.15
-  spy[i] = 0.5 + (random(1) - 0.5) * 0.15
-  spz[i] = 0.6  // a touch below center so they have farther to climb
+  base = i * trailLen
 
-  // Strong upward velocity (negative vz), modest random horizontal drift.
-  // The drift is what eventually carries the spark close enough to a side
-  // wall to be visible as a sharp point.
-  ang = random(1) * 2 * PI
-  spd = 0.25 + random(0.35)
-  spvx[i] = cos(ang) * spd
-  spvy[i] = sin(ang) * spd
-  spvz[i] = -(0.7 + random(0.7))
+  // Born near the cube core with a small jitter.
+  trailX[base] = 0.5 + (random(1) - 0.5) * 0.15
+  trailY[base] = 0.5 + (random(1) - 0.5) * 0.15
+  trailZ[base] = 0.6
 
-  splife[i] = 0.9 + random(0.9)
-  spage[i]  = 0
+  // Collapse the rest of the trail onto the spawn point so it can grow
+  // out behind the spark cleanly as shifts happen.
+  for (j = 1; j < trailLen; j++) {
+    trailX[base + j]   = trailX[base]
+    trailY[base + j]   = trailY[base]
+    trailZ[base + j]   = trailZ[base]
+    trailAmp[base + j] = 0
+  }
+  trailAmp[base] = 1.8
+
+  // Random direction in the upper hemisphere with a cosine-weighted bias
+  // toward straight up. Some embers will fly nearly horizontal.
+  phi    = random(1) * 2 * PI
+  upDot  = 0.2 + random(0.8)             // 0.2..1.0; 1 = straight up
+  horR   = sqrt(1 - upDot * upDot)
+  speed  = 0.7 + random(0.7)
+
+  sparkVx[i] = cos(phi) * horR * speed
+  sparkVy[i] = sin(phi) * horR * speed
+  sparkVz[i] = -upDot * speed            // negative z is "up"
+
+  sparkAge[i]    = 0
+  sparkLife[i]   = 0.8 + random(0.8)
+  sparkActive[i] = 1
+}
+
+// Push every spark's recent positions back one slot. Slot 0 stays put
+// (the head keeps moving each frame), slot 1 captures where the head
+// was at the previous shift, slot 2 the shift before that, etc.
+function shiftTrails() {
+  for (i = 0; i < maxSparks; i++) {
+    base = i * trailLen
+    for (j = trailLen - 1; j > 0; j--) {
+      trailX[base + j]   = trailX[base + j - 1]
+      trailY[base + j]   = trailY[base + j - 1]
+      trailZ[base + j]   = trailZ[base + j - 1]
+      trailAmp[base + j] = trailAmp[base + j - 1] * trailDecay
+    }
+  }
 }
 
 export function beforeRender(delta) {
   dt = delta * 0.001
 
-  // Three time bases for the wave field; rise is on its own axis so the
-  // flame appears to flow up rather than just shimmer in place.
+  // ---- Fire field ----
   t1   = time(0.07)
   t2   = time(0.083)
   rise = time(0.04 / (0.3 + sliderRise * 1.7))
@@ -90,36 +122,43 @@ export function beforeRender(delta) {
   turbAmt  = sliderTurbulence
   turbBase = 1 - turbAmt
 
-  // Spark lifecycle: each idle slot has a per-frame chance to spawn,
-  // scaled so sliderSparks ≈ 1 keeps roughly all 8 slots in flight.
-  spawnChance = dt * (0.5 + sliderSparks * 6)
+  // ---- Trail snapshot ----
+  shiftAccum += dt
+  if (shiftAccum >= shiftPeriod) {
+    shiftAccum -= shiftPeriod
+    shiftTrails()
+  }
+
+  // ---- Spark physics + lifecycle ----
+  spawnChance = dt * (0.5 + sliderSparks * 12)
+  gravity     = 0.6   // pulls velocity toward +z (down)
 
   for (i = 0; i < maxSparks; i++) {
-    if (spage[i] >= splife[i]) {
-      // Idle slot.
-      if (random(1) < spawnChance) {
-        spawnSpark(i)
-      } else {
-        spamp[i] = 0
-      }
+    base = i * trailLen
+    if (!sparkActive[i]) {
+      if (random(1) < spawnChance) spawnSpark(i)
+      else trailAmp[base] = 0
     } else {
-      spage[i] += dt
-      spx[i] += spvx[i] * dt
-      spy[i] += spvy[i] * dt
-      spz[i] += spvz[i] * dt
+      sparkAge[i] += dt
+      sparkVz[i] += gravity * dt
+      trailX[base] += sparkVx[i] * dt
+      trailY[base] += sparkVy[i] * dt
+      trailZ[base] += sparkVz[i] * dt
 
-      // Fade in fast, then a long taper. Peak amplitude tuned so a spark
-      // overpowers the fire palette where it lands.
-      p = spage[i] / splife[i]
-      spamp[i] = (p < 0.1 ? p * 10 : 1 - (p - 0.1) / 0.9) * 1.6
+      // Linear fade over life — gives the head a clear extinction.
+      p = sparkAge[i] / sparkLife[i]
+      trailAmp[base] = (1 - p) * 1.8
 
-      // Retire if the spark has shot through the top or wandered past
-      // the cube on a side. Setting age to life marks the slot idle.
-      if (spz[i] < -0.05 ||
-          spx[i] < -0.15 || spx[i] > 1.15 ||
-          spy[i] < -0.15 || spy[i] > 1.15) {
-        spage[i] = splife[i]
-        spamp[i] = 0
+      // Retire if it has flown out the top, fallen back through the
+      // bottom panel into the floor, or wandered past a side wall.
+      if (sparkAge[i] >= sparkLife[i] ||
+          trailZ[base] < -0.05 || trailZ[base] > 1.15 ||
+          trailX[base] < -0.15 || trailX[base] > 1.15 ||
+          trailY[base] < -0.15 || trailY[base] > 1.15) {
+        sparkActive[i] = 0
+        trailAmp[base] = 0
+        // Older slots are left to dim through subsequent shifts so the
+        // tail finishes trailing off after the head goes dark.
       }
     }
   }
@@ -135,22 +174,20 @@ export function render3D(index, x, y, z) {
   turb = wave(x * 3 + t1) * wave(y * 3 + t2) * wave(z * 3 + rise)
   heat = core * (turbBase + turb * 2 * turbAmt)
 
-  // ---- spark contribution ----
-  // Tight 3D falloff: at d = 0 → 1, at d ≈ 0.1 → ~0.5, at d ≈ 0.3 → ~0.1.
-  // Sparks deep in the interior glow softly across nearby walls; once
-  // they drift close to a wall they crisp up into a single pixel.
+  // ---- trail contribution ----
+  // Polynomial falloff with hard cutoff: at d² · 220 ≥ 1 (≈ d > 0.067,
+  // which is one pixel spacing on a 16-cell face) the contribution is 0.
+  // So each trail point essentially lights one pixel — its nearest.
   white = 0
-  for (i = 0; i < maxSparks; i++) {
-    dx = x - spx[i]
-    dy = y - spy[i]
-    dz = z - spz[i]
+  for (i = 0; i < slots; i++) {
+    dx = x - trailX[i]
+    dy = y - trailY[i]
+    dz = z - trailZ[i]
     d2 = dx * dx + dy * dy + dz * dz
-    white += spamp[i] / (1 + d2 * 120)
+    white += trailAmp[i] * clamp(1 - d2 * 220, 0, 1)
   }
 
   // ---- palette ----
-  // White overlay bleaches saturation and pushes value to 1 wherever a
-  // spark lands; elsewhere the fire palette is unchanged.
   h   = 0.02 + clamp(heat, 0, 1) * 0.10
   sat = clamp(1.3 - heat * 1.0 - white * 2.5, 0, 1)
   val = clamp(heat * heat * 1.5 + white * 1.5, 0, 1)
