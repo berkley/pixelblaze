@@ -45,8 +45,8 @@ bandActive = array(maxBands)
 for (i = 0; i < maxBands; i++) bandActive[i] = 0
 
 // ---- Audio analysis state ----
-bassAvg        = 0.05
-trebleAvg      = 0.05
+bassPeak       = 0.001
+treblePeak     = 0.001
 lastBassBeat   = -10
 lastTrebleBeat = -10
 elapsed        = 0
@@ -128,20 +128,32 @@ export function beforeRender(delta) {
   for (i = 20; i < 32; i++) trebleNow += frequencyData[i]
   trebleNow *= 1 / 12
 
-  // Long-running averages adapt to the noise floor of the current track.
-  bassAvg   = bassAvg   * 0.96 + bassNow   * 0.04
-  trebleAvg = trebleAvg * 0.94 + trebleNow * 0.06
+  // Track a slowly-decaying recent peak per band so the threshold scales
+  // automatically with the volume of whatever's playing. The SB 1.0
+  // outputs FFT magnitudes on a small scale (peaks well under 0.1 for
+  // most music), so peak-relative detection is much more robust than a
+  // fixed absolute threshold.
+  bassPeak   = bassPeak   * 0.995
+  treblePeak = treblePeak * 0.995
+  if (bassNow   > bassPeak)   bassPeak   = bassNow
+  if (trebleNow > treblePeak) treblePeak = trebleNow
 
-  // Adaptive thresholds. Higher sensitivity = more bands fire.
-  bassThresh   = bassAvg   * (1.6 - sliderBassSensitivity   * 0.9) + 0.04
-  trebleThresh = trebleAvg * (1.6 - sliderTrebleSensitivity * 0.9) + 0.04
+  // Adaptive thresholds: a fraction of recent peak, with a small
+  // absolute floor to suppress noise during silence. Sensitivity slider
+  // tunes how close to the peak a sample has to come to count as a beat.
+  bassRel    = 0.3 + (1 - sliderBassSensitivity)   * 0.5   // 0.3..0.8
+  trebleRel  = 0.3 + (1 - sliderTrebleSensitivity) * 0.5
+  bassFloor  = 0.0015 + (1 - sliderBassSensitivity)   * 0.006
+  trebleFloor = 0.0010 + (1 - sliderTrebleSensitivity) * 0.005
+
+  bassThresh   = max(bassPeak   * bassRel,   bassFloor)
+  trebleThresh = max(treblePeak * trebleRel, trebleFloor)
 
   // Minimum gap between detections (caps at ~220 BPM).
   minGap = 60 / 220
 
   // ---- Bass beat detection ----
-  if (bassNow > bassThresh && bassNow > 0.05 &&
-      elapsed - lastBassBeat > minGap) {
+  if (bassNow > bassThresh && elapsed - lastBassBeat > minGap) {
 
     // Find the dominant bass bin to pick the hue.
     peakBin = 0
@@ -166,8 +178,7 @@ export function beforeRender(delta) {
   }
 
   // ---- Treble beat detection ----
-  if (trebleNow > trebleThresh && trebleNow > 0.04 &&
-      elapsed - lastTrebleBeat > minGap * 0.5) {
+  if (trebleNow > trebleThresh && elapsed - lastTrebleBeat > minGap * 0.5) {
 
     peakBin = 20
     peakVal = frequencyData[20]
