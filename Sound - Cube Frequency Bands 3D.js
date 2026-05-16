@@ -24,6 +24,13 @@ export var sliderBassWidth         = 0.4   // thickness of rising bands
 export var sliderTrebleWidth       = 0.4   // angular width of sweeping bands
 export var sliderBrightness        = 0.9
 
+// Audio inputs populated by the sensor expansion board. They must be
+// declared as exported variables so the firmware can write into them.
+export var frequencyData         = array(32)
+export var energyAverage         = 0
+export var maxFrequencyMagnitude = 0
+export var maxFrequency          = 0
+
 // ---- Band pool ----
 maxBands = 16
 bandType   = array(maxBands)   // 0 = rising (vertical), 1 = sweeping (rotational)
