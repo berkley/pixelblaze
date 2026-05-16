@@ -175,8 +175,8 @@ export function beforeRender(delta) {
   // ---- Normalized spike: where in [avg .. peak] is `now`? ----
   // Floors on the denominator keep things sane during startup / true
   // silence (when peak ≈ avg ≈ 0).
-  bassDyn   = max(bassPeak   - bassAvg,   bassPeak   * 0.2, 0.00005)
-  trebleDyn = max(treblePeak - trebleAvg, treblePeak * 0.2, 0.00005)
+  bassDyn   = max(max(bassPeak   - bassAvg,   bassPeak   * 0.2), 0.00005)
+  trebleDyn = max(max(treblePeak - trebleAvg, treblePeak * 0.2), 0.00005)
 
   bassSpike   = max(0, bassNow   - bassAvg)   / bassDyn
   trebleSpike = max(0, trebleNow - trebleAvg) / trebleDyn
