@@ -12,39 +12,61 @@
     treble bin (low end = cyan, top end = magenta).
 
   Motion speed for both band types is locked to a running BPM estimate
-  derived from the gap between detected bass beats, so the animation
-  scales with the cadence of the music.
+  derived from the gap between detected bass beats.
 
-  Requires the SB sensor board so frequencyData[] is populated.
+  The SB 1.0 emits very small FFT magnitudes (peaks well under 0.1 even
+  on loud music). A PI controller adjusts an internal gain ("sensitivity")
+  so that the scaled energy averages around targetFill regardless of
+  input volume. Beats are then detected as positive deviations from each
+  band's rolling average, in that scaled space.
+
+  Falls back to simulated audio if no SB is detected (light == -1).
 */
 
-export var sliderBassSensitivity   = 0.7
-export var sliderTrebleSensitivity = 0.7
-export var sliderBassWidth         = 0.4   // thickness of rising bands
-export var sliderTrebleWidth       = 0.4   // angular width of sweeping bands
+export var sliderBassSensitivity   = 0.5   // higher = more bass bands
+export var sliderTrebleSensitivity = 0.5   // higher = more treble bands
+export var sliderBassWidth         = 0.4
+export var sliderTrebleWidth       = 0.4
 export var sliderBrightness        = 0.9
-export var sliderTestMode          = 0     // > 0 spawns bands on a timer (no audio needed)
+export var sliderTestMode          = 0     // > 0: spawn bands on a timer (no audio)
 
-// Diagnostic outputs — visible in Vars Watch while running. Use them to
-// tune sensitivity: watch `bassNow` while music plays, compare to
-// `bassThresh`. If `bassNow` never reaches `bassThresh`, audio isn't
-// hot enough — drop sensitivity slider or check the SB gain.
+// ---- Sensor board inputs ----
+// Set by the SB firmware. If `light` stays at -1 we know no board is
+// attached and we fall back to a simulated audio signal.
+export var light            = -1
+export var frequencyData    = array(32)
+export var energyAverage    = 0
+
+// ---- Diagnostic exports (visible in Vars Watch for tuning) ----
 export var bassNow      = 0
 export var trebleNow    = 0
-export var bassThresh   = 0
-export var trebleThresh = 0
+export var bassAvg      = 0
+export var trebleAvg    = 0
+export var bassSpike    = 0
+export var trebleSpike  = 0
+export var sensitivity  = 50
 export var detectedBpm  = 120
 
-// Audio inputs populated by the sensor expansion board. They must be
-// declared as exported variables so the firmware can write into them.
-export var frequencyData         = array(32)
-export var energyAverage         = 0
-export var maxFrequencyMagnitude = 0
-export var maxFrequency          = 0
+// ---- PI controller for auto gain ----
+// Targets a normalized energy level of `targetFill`. The integrator
+// (pic[2]) compensates for steady-state error, so quiet rooms drive
+// sensitivity high (up to pic[4]) and loud rooms pull it back down.
+targetFill = 0.2
+pic = array(5)
+pic[0] = 0.2    // Kp
+pic[1] = 0.15   // Ki
+pic[2] = 50     // integrator start
+pic[3] = 0      // min
+pic[4] = 400    // max
+
+function calcPI(err) {
+  pic[2] = clamp(pic[2] + err, pic[3], pic[4])
+  return max(pic[0] * err + pic[1] * pic[2], 0.3)
+}
 
 // ---- Band pool ----
-maxBands = 16
-bandType   = array(maxBands)   // 0 = rising (vertical), 1 = sweeping (rotational)
+maxBands   = 16
+bandType   = array(maxBands)   // 0 = rising vertical, 1 = sweeping rotational
 bandHue    = array(maxBands)
 bandAge    = array(maxBands)
 bandLife   = array(maxBands)
@@ -55,24 +77,23 @@ bandActive = array(maxBands)
 
 for (i = 0; i < maxBands; i++) bandActive[i] = 0
 
-// ---- Audio analysis state ----
-bassPeak       = 0.001
-treblePeak     = 0.001
+// ---- Beat / timing state ----
 lastBassBeat   = -10
 lastTrebleBeat = -10
 elapsed        = 0
-bpm            = 120
 beatPeriod     = 0.5
 
-// Tracking flags so per-pixel work can be skipped when nothing's active.
-hasRising    = 0
-hasSweeping  = 0
+// Skip flags so per-pixel render can bail when nothing's drawing.
+hasRising   = 0
+hasSweeping = 0
+
+// Test-mode timer
+testAccum = 0
 
 function findFreeBand() {
   for (i = 0; i < maxBands; i++) {
     if (!bandActive[i]) return i
   }
-  // No free slot — recycle the oldest active band.
   oldest = 0
   oldestAge = bandAge[0]
   for (i = 1; i < maxBands; i++) {
@@ -86,11 +107,10 @@ function spawnRising(hue, intensity) {
   bandType[i]   = 0
   bandHue[i]    = hue
   bandAge[i]    = 0
-  // Rise from bottom (z=1) through the top (z<0) in roughly 2 beats.
   bandLife[i]   = beatPeriod * 2
   bandPos[i]    = 1.05
   bandVel[i]    = -1.2 / bandLife[i]
-  bandWidth[i]  = 0.05 + sliderBassWidth * 0.12 + intensity * 0.05
+  bandWidth[i]  = 0.05 + sliderBassWidth * 0.12 + clamp(intensity, 0, 2) * 0.04
   bandActive[i] = 1
 }
 
@@ -99,16 +119,14 @@ function spawnSweeping(hue, intensity) {
   bandType[i]   = 1
   bandHue[i]    = hue
   bandAge[i]    = 0
-  // One full revolution every ~4 beats.
   bandLife[i]   = beatPeriod * 4
   bandPos[i]    = random(1) * 2 * PI
   bandVel[i]    = (random(1) > 0.5 ? 1 : -1) * 2 * PI / bandLife[i]
-  bandWidth[i]  = 0.15 + sliderTrebleWidth * 0.45 + intensity * 0.1
+  bandWidth[i]  = 0.15 + sliderTrebleWidth * 0.45 + clamp(intensity, 0, 2) * 0.08
   bandActive[i] = 1
 }
 
-// HSV -> RGB (assumes s = 1). Writes globals hr, hg, hb so callers can
-// accumulate into the per-pixel color without allocating temporaries.
+// HSV -> RGB (sat = 1). Writes globals hr/hg/hb so callers can accumulate.
 hr = 0; hg = 0; hb = 0
 function h2rgb(h, v) {
   hh = (h - floor(h)) * 6
@@ -124,85 +142,125 @@ function h2rgb(h, v) {
   else              { hr = v; hg = 0; hb = q }
 }
 
+// ---- Simulated audio (used when no SB is detected) ----
+// A simple 120-BPM 4-on-the-floor pattern: kick on every quarter, claps
+// on offbeats, hi-hat on 2 and 4. Lets you test rendering without the
+// sensor board attached.
+simBpm = 120
+simMeasure = 4 * 60 / simBpm / 65.536
+
+function simulateAudio() {
+  tM = time(simMeasure)
+  for (i = 0; i < 32; i++) frequencyData[i] = 0
+
+  // Kick — energy in lowest bins
+  beat = (-4 * tM + 5) % 1
+  beat *= 0.02 * pow(beat, 4)
+  for (i = 0; i < 10; i++) frequencyData[i] += beat * (10 - i) / 10
+
+  // Claps — energy in low-mid bins on offbeats
+  claps = 0.006 * square(2 * tM - 0.5, 0.10)
+  for (i = 9; i < 18; i++) frequencyData[i] += claps * (0.7 + 0.6 * random(0.5))
+
+  // Hi-hat — energy in high bins on 2 and 4
+  hh = 0.012 * square(4 * tM - 0.5, 0.05)
+  for (i = 22; i < 30; i++) frequencyData[i] += hh * (0.8 + random(0.4))
+
+  energyAverage = beat * 0.5 + claps * 0.5 + hh * 0.5
+}
+
 export function beforeRender(delta) {
   dt = delta * 0.001
   elapsed += dt
 
-  // ---- Aggregate energy in two FFT regions ----
-  // Bass: bins 0..7 (lowest frequencies).
+  // ---- Audio source ----
+  // If no sensor board is attached, run the simulator at 40 Hz so the
+  // rendering pipeline can be verified.
+  if (light == -1) simulateAudio()
+
+  // ---- Auto gain ----
+  // Drive sensitivity so that sensitivity * energyAverage ≈ targetFill.
+  // Quiet rooms ramp sensitivity up; loud rooms pull it back down.
+  scaledEnergy = sensitivity * energyAverage
+  sensitivity  = calcPI(targetFill - scaledEnergy)
+
+  // ---- Aggregate energy in two FFT regions (raw, no gain) ----
   bassNow = 0
   for (i = 0; i < 8; i++) bassNow += frequencyData[i]
   bassNow *= 0.125
 
-  // Treble: bins 20..31 (upper end).
   trebleNow = 0
   for (i = 20; i < 32; i++) trebleNow += frequencyData[i]
   trebleNow *= 1 / 12
 
-  // Track a slowly-decaying recent peak per band so the threshold scales
-  // automatically with the volume of whatever's playing. The SB 1.0
-  // outputs FFT magnitudes on a small scale (peaks well under 0.1 for
-  // most music), so peak-relative detection is much more robust than a
-  // fixed absolute threshold.
-  bassPeak   = bassPeak   * 0.995
-  treblePeak = treblePeak * 0.995
-  if (bassNow   > bassPeak)   bassPeak   = bassNow
-  if (trebleNow > treblePeak) treblePeak = trebleNow
+  // Rolling averages of the raw values over ~1500 ms.
+  dw = delta / 1500
+  bassAvg   = bassAvg   * (1 - dw) + bassNow   * dw
+  trebleAvg = trebleAvg * (1 - dw) + trebleNow * dw
 
-  // Adaptive thresholds: a fraction of recent peak, with a small
-  // absolute floor to suppress noise during silence. Sensitivity slider
-  // tunes how close to the peak a sample has to come to count as a beat.
-  bassRel    = 0.3 + (1 - sliderBassSensitivity)   * 0.5   // 0.3..0.8
-  trebleRel  = 0.3 + (1 - sliderTrebleSensitivity) * 0.5
-  bassFloor  = 0.0015 + (1 - sliderBassSensitivity)   * 0.006
-  trebleFloor = 0.0010 + (1 - sliderTrebleSensitivity) * 0.005
+  // Spike = how far current sits above its rolling average, in the
+  // gain-normalized space. Negative deviations are clipped to 0.
+  bassSpike   = max(0, bassNow   - bassAvg)   * sensitivity
+  trebleSpike = max(0, trebleNow - trebleAvg) * sensitivity
 
-  bassThresh   = max(bassPeak   * bassRel,   bassFloor)
-  trebleThresh = max(treblePeak * trebleRel, trebleFloor)
+  // Beat thresholds: higher sensitivity slider lowers the bar.
+  bassBeatThresh   = 0.50 - sliderBassSensitivity   * 0.40   // 0.10..0.50
+  trebleBeatThresh = 0.40 - sliderTrebleSensitivity * 0.32   // 0.08..0.40
 
-  // Minimum gap between detections (caps at ~220 BPM).
   minGap = 60 / 220
 
-  // ---- Bass beat detection ----
-  if (bassNow > bassThresh && elapsed - lastBassBeat > minGap) {
-
-    // Find the dominant bass bin to pick the hue.
+  // ---- Bass beat ----
+  if (bassSpike > bassBeatThresh && elapsed - lastBassBeat > minGap) {
     peakBin = 0
     peakVal = frequencyData[0]
     for (i = 1; i < 8; i++) {
       if (frequencyData[i] > peakVal) { peakVal = frequencyData[i]; peakBin = i }
     }
-    // 0 = red, 7 = yellow-orange.
     hue = peakBin / 7 * 0.14
-    spawnRising(hue, peakVal)
+    spawnRising(hue, bassSpike)
 
-    // BPM estimate from inter-beat interval.
     if (lastBassBeat > 0) {
       interval = elapsed - lastBassBeat
       if (interval > 0.27 && interval < 1.5) {
         newBpm = 60 / interval
-        bpm = bpm * 0.6 + newBpm * 0.4
-        beatPeriod = 60 / bpm
+        detectedBpm = detectedBpm * 0.6 + newBpm * 0.4
+        beatPeriod = 60 / detectedBpm
       }
     }
     lastBassBeat = elapsed
   }
 
-  // ---- Treble beat detection ----
-  if (trebleNow > trebleThresh && elapsed - lastTrebleBeat > minGap * 0.5) {
-
+  // ---- Treble beat ----
+  if (trebleSpike > trebleBeatThresh &&
+      elapsed - lastTrebleBeat > minGap * 0.5) {
     peakBin = 20
     peakVal = frequencyData[20]
     for (i = 21; i < 32; i++) {
       if (frequencyData[i] > peakVal) { peakVal = frequencyData[i]; peakBin = i }
     }
-    // 20 -> cyan (0.5), 31 -> magenta (0.85).
     hue = 0.5 + (peakBin - 20) / 11 * 0.35
-    spawnSweeping(hue, peakVal)
+    spawnSweeping(hue, trebleSpike)
     lastTrebleBeat = elapsed
   }
 
-  // ---- Advance bands and rebuild type flags ----
+  // ---- Test mode (audio-independent) ----
+  // Spawn alternating bands on a timer at a rate set by the slider.
+  // Useful to confirm the rendering pipeline works when audio isn't
+  // triggering anything yet.
+  if (sliderTestMode > 0) {
+    testAccum += dt
+    testInterval = 0.15 + (1 - sliderTestMode) * 1.0   // 0.15..1.15 s
+    if (testAccum >= testInterval) {
+      testAccum = 0
+      if (random(1) < 0.6) {
+        spawnRising(random(1) * 0.14, 0.5)
+      } else {
+        spawnSweeping(0.5 + random(1) * 0.35, 0.5)
+      }
+    }
+  }
+
+  // ---- Advance bands ----
   hasRising   = 0
   hasSweeping = 0
   for (i = 0; i < maxBands; i++) {
@@ -222,31 +280,22 @@ export function beforeRender(delta) {
 export function render3D(index, x, y, z) {
   r = 0; g = 0; b = 0
 
-  // Compute the pixel's angle around the cube's vertical axis only when
-  // a sweeping band is actually active.
   pxAng = 0
   rxyWeight = 0
   if (hasSweeping) {
     cx = x - 0.5
     cy = y - 0.5
     pxAng = atan2(cy, cx)
-    // Fade rotational contribution near the central axis of the bottom
-    // panel — atan2 is unstable there and we don't want a chaotic
-    // fan effect on the central pixels.
     rxy2 = cx * cx + cy * cy
     rxyWeight = clamp(rxy2 * 6, 0, 1)
   }
 
   for (i = 0; i < maxBands; i++) {
     if (bandActive[i]) {
-      // Hold full brightness for the first third of the band's life,
-      // then taper linearly to zero. Bands stay clearly visible while
-      // they traverse the cube and only fade as they reach the end.
       p = bandAge[i] / bandLife[i]
       fade = clamp((1 - p) * 1.5, 0, 1)
 
       if (bandType[i] == 0) {
-        // Rising band: distance from band's current z to the pixel's z.
         dist = abs(z - bandPos[i])
         if (dist < bandWidth[i]) {
           bri = (1 - dist / bandWidth[i]) * fade
@@ -254,7 +303,6 @@ export function render3D(index, x, y, z) {
           r += hr; g += hg; b += hb
         }
       } else {
-        // Sweeping band: wrapped angular distance.
         ad = pxAng - bandPos[i]
         ad = ad - 2 * PI * floor((ad + PI) / (2 * PI))
         ad = abs(ad)
