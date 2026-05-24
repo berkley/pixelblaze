@@ -21,6 +21,11 @@ scale = 1 / (PI * PI)   // How wide the "spotlights" are
 var beatsPerSpinCtrl = 0.4   // 0 = 1 beat/turn, 1 = 8 beats/turn (default ≈ 3.8)
 export function sliderBeatsPerSpin(v) { beatsPerSpinCtrl = v }
 
+// Manual BPM override. 0 = auto-detect; otherwise maps to 60..200 BPM.
+// Useful when auto-detection picks the wrong tempo and won't recover.
+var manualBpmCtrl = 0
+export function sliderManualBpm(v) { manualBpmCtrl = v }
+
 // ---- Sensor board inputs ----
 export var light         = -1
 export var frequencyData = array(32)
@@ -36,6 +41,7 @@ var bassAvg      = 0
 var bassPeak     = 0
 var lastBassBeat = -10
 var elapsed      = 0
+var bpmSamples   = 0     // bootstrap counter
 
 // ---- Beat-locked spin phase ----
 var spinPhase = 0
@@ -58,23 +64,37 @@ export function beforeRender(delta) {
   bassDyn   = max(max(bassPeak - bassAvg, bassPeak * 0.2), 0.00005)
   bassSpike = max(0, bassNow - bassAvg) / bassDyn
 
-  if (bassSpike > 0.45 && elapsed - lastBassBeat > 60 / 220) {
+  // Higher threshold (0.6) so we only fire on near-peak hits — real
+  // kicks, not low-level transients between them.
+  if (bassSpike > 0.6 && elapsed - lastBassBeat > 60 / 220) {
     if (lastBassBeat > 0) {
       interval = elapsed - lastBassBeat
       if (interval > 0.27 && interval < 1.5) {
         newBpm = 60 / interval
-        // Snap to the nearest 1×/2×/0.5× of current estimate so a
-        // spurious between-beat hit or a missed kick doesn't poison
-        // the running average.
-        ratio = newBpm / detectedBpm
-        if      (ratio > 1.6 && ratio < 2.5)  newBpm = newBpm * 0.5
-        else if (ratio > 0.4 && ratio < 0.62) newBpm = newBpm * 2
-        if (abs(newBpm - detectedBpm) / detectedBpm < 0.25) {
-          detectedBpm = detectedBpm * 0.8 + newBpm * 0.2
+        bpmSamples = bpmSamples + 1
+
+        if (bpmSamples < 8) {
+          // Bootstrap: trust raw data so detectedBpm rapidly converges
+          // to the real tempo, even if the 120 default is far off.
+          detectedBpm = detectedBpm * 0.5 + newBpm * 0.5
+        } else {
+          // Steady state: snap to nearest 1×/2×/0.5× of current
+          // estimate, then only accept if within 25% of current.
+          ratio = newBpm / detectedBpm
+          if      (ratio > 1.6 && ratio < 2.5)  newBpm = newBpm * 0.5
+          else if (ratio > 0.4 && ratio < 0.62) newBpm = newBpm * 2
+          if (abs(newBpm - detectedBpm) / detectedBpm < 0.25) {
+            detectedBpm = detectedBpm * 0.8 + newBpm * 0.2
+          }
         }
       }
     }
     lastBassBeat = elapsed
+  }
+
+  // Manual override wins if the slider is non-zero.
+  if (manualBpmCtrl > 0.01) {
+    detectedBpm = 60 + manualBpmCtrl * 140   // 60..200 BPM
   }
 
   // ---- Beat-locked spin ----
