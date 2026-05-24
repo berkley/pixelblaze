@@ -25,12 +25,12 @@
 // Pixelblaze creates UI sliders from exported `slider*` *functions*,
 // not vars. Each function is invoked with the slider's current 0..1
 // value whenever it moves.
-bassSensCtrl   = 0.6
-trebleSensCtrl = 0.6
-bassWidthCtrl  = 0.4
-trebleWidthCtrl= 0.4
-brightnessCtrl = 0.9
-testModeCtrl   = 0
+var bassSensCtrl    = 0.6
+var trebleSensCtrl  = 0.6
+var bassWidthCtrl   = 0.4
+var trebleWidthCtrl = 0.4
+var brightnessCtrl  = 0.9
+var testModeCtrl    = 0
 
 export function sliderBassSensitivity(v)   { bassSensCtrl    = v }
 export function sliderTrebleSensitivity(v) { trebleSensCtrl  = v }

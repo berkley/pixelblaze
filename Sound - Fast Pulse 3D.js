@@ -23,7 +23,7 @@
 // Pixelblaze creates UI sliders from exported `slider*` *functions*, not
 // vars. The function is invoked with the slider's current 0..1 value
 // whenever it moves.
-beatsPerLayerCtrl = 0   // 0..1, set by the slider below
+var beatsPerLayerCtrl = 0   // 0..1, set by the slider below
 export function sliderBeatsPerLayer(v) { beatsPerLayerCtrl = v }
 
 // ---- Sensor board inputs ----
