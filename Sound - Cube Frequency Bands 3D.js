@@ -21,12 +21,23 @@
     a floor()-based angle wrap, so the inner loop is branch-light.
 */
 
-export var sliderBassSensitivity   = 0.6
-export var sliderTrebleSensitivity = 0.6
-export var sliderBassWidth         = 0.4
-export var sliderTrebleWidth       = 0.4
-export var sliderBrightness        = 0.9
-export var sliderTestMode          = 0
+// ---- UI sliders ----
+// Pixelblaze creates UI sliders from exported `slider*` *functions*,
+// not vars. Each function is invoked with the slider's current 0..1
+// value whenever it moves.
+bassSensCtrl   = 0.6
+trebleSensCtrl = 0.6
+bassWidthCtrl  = 0.4
+trebleWidthCtrl= 0.4
+brightnessCtrl = 0.9
+testModeCtrl   = 0
+
+export function sliderBassSensitivity(v)   { bassSensCtrl    = v }
+export function sliderTrebleSensitivity(v) { trebleSensCtrl  = v }
+export function sliderBassWidth(v)         { bassWidthCtrl   = v }
+export function sliderTrebleWidth(v)       { trebleWidthCtrl = v }
+export function sliderBrightness(v)        { brightnessCtrl  = v }
+export function sliderTestMode(v)          { testModeCtrl    = v }
 
 // ---- Sensor board inputs ----
 export var light            = -1
@@ -104,7 +115,7 @@ function spawnRising(hue, intensity) {
   bandLife[i]   = beatPeriod * 2
   bandPos[i]    = 1.05
   bandVel[i]    = -1.2 / bandLife[i]
-  bandWidth[i]  = 0.05 + sliderBassWidth * 0.12 + clamp(intensity, 0, 1) * 0.06
+  bandWidth[i]  = 0.05 + bassWidthCtrl * 0.12 + clamp(intensity, 0, 1) * 0.06
   bandActive[i] = 1
 }
 
@@ -116,7 +127,7 @@ function spawnSweeping(hue, intensity) {
   bandLife[i]   = beatPeriod * 4
   bandPos[i]    = random(1) * 2 * PI
   bandVel[i]    = (random(1) > 0.5 ? 1 : -1) * 2 * PI / bandLife[i]
-  bandWidth[i]  = 0.15 + sliderTrebleWidth * 0.45 + clamp(intensity, 0, 1) * 0.12
+  bandWidth[i]  = 0.15 + trebleWidthCtrl * 0.45 + clamp(intensity, 0, 1) * 0.12
   bandActive[i] = 1
 }
 
@@ -187,8 +198,8 @@ export function beforeRender(delta) {
   bassSpike   = max(0, bassNow   - bassAvg)   / bassDyn
   trebleSpike = max(0, trebleNow - trebleAvg) / trebleDyn
 
-  bassBeatThresh   = 0.65 - sliderBassSensitivity   * 0.40
-  trebleBeatThresh = 0.55 - sliderTrebleSensitivity * 0.35
+  bassBeatThresh   = 0.65 - bassSensCtrl   * 0.40
+  trebleBeatThresh = 0.55 - trebleSensCtrl * 0.35
 
   minGap = 60 / 220
 
@@ -224,9 +235,9 @@ export function beforeRender(delta) {
     lastTrebleBeat = elapsed
   }
 
-  if (sliderTestMode > 0) {
+  if (testModeCtrl > 0) {
     testAccum += dt
-    testInterval = 0.15 + (1 - sliderTestMode) * 1.0
+    testInterval = 0.15 + (1 - testModeCtrl) * 1.0
     if (testAccum >= testInterval) {
       testAccum = 0
       if (random(1) < 0.6) {
@@ -248,7 +259,7 @@ export function beforeRender(delta) {
       } else {
         p = bandAge[i] / bandLife[i]
         // Hold full for first third of life, then linear taper.
-        fade = clamp((1 - p) * 1.5, 0, 1) * sliderBrightness
+        fade = clamp((1 - p) * 1.5, 0, 1) * brightnessCtrl
         h2rgb(bandHue[i], fade)
         bandR[i] = hr
         bandG[i] = hg

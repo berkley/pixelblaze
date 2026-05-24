@@ -19,7 +19,12 @@
   oscillators, so the cube keeps tumbling continuously between beats.
 */
 
-export var sliderBeatsPerLayer = 0   // 0 = 1 beat/layer, 1 = 8 beats/layer
+// ---- UI control ----
+// Pixelblaze creates UI sliders from exported `slider*` *functions*, not
+// vars. The function is invoked with the slider's current 0..1 value
+// whenever it moves.
+beatsPerLayerCtrl = 0   // 0..1, set by the slider below
+export function sliderBeatsPerLayer(v) { beatsPerLayerCtrl = v }
 
 // ---- Sensor board inputs ----
 export var light         = -1
@@ -75,7 +80,7 @@ export function beforeRender(delta) {
 
   // ---- Beat-locked layer phase ----
   // One full triangle cycle (one layer) every `beatsPerLayer` beats.
-  beatsPerLayer = 1 + sliderBeatsPerLayer * 7
+  beatsPerLayer = 1 + beatsPerLayerCtrl * 7
   layerPhase += dt * detectedBpm / 60 / beatsPerLayer
 
   // ---- Original animation state (rotation + hue) ----
