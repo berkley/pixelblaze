@@ -53,11 +53,12 @@ export function beforeRender(delta) {
   elapsed += dt
 
   // ---- Bass beat detection (drives BPM only — no spawning) ----
-  // Same peak-relative spike approach as the Cube Frequency Bands
-  // pattern: works across any volume of music on the SB 1.0.
+  // Sub-bass only (bins 0-3): kicks dominate here, while claps and
+  // snares with content in bins 4+ are excluded. Keeps the BPM
+  // detector from firing on offbeats.
   bassNow = 0
-  for (i = 0; i < 8; i++) bassNow += frequencyData[i]
-  bassNow *= 0.125
+  for (i = 0; i < 4; i++) bassNow += frequencyData[i]
+  bassNow *= 0.25
 
   dw = delta / 2000
   bassAvg  = bassAvg  * (1 - dw) + bassNow * dw
@@ -72,7 +73,19 @@ export function beforeRender(delta) {
       interval = elapsed - lastBassBeat
       if (interval > 0.27 && interval < 1.5) {
         newBpm = 60 / interval
-        detectedBpm = detectedBpm * 0.6 + newBpm * 0.4
+
+        // Snap to multiple of current estimate so a single detection at
+        // 2× tempo (spurious between-beat hit) or 0.5× tempo (we missed
+        // an actual beat) doesn't pull the average off the real tempo.
+        ratio = newBpm / detectedBpm
+        if      (ratio > 1.6 && ratio < 2.5) newBpm = newBpm * 0.5
+        else if (ratio > 0.4 && ratio < 0.62) newBpm = newBpm * 2
+
+        // Only blend if the (corrected) candidate is within 25% of the
+        // current estimate. Spurious outliers get ignored entirely.
+        if (abs(newBpm - detectedBpm) / detectedBpm < 0.25) {
+          detectedBpm = detectedBpm * 0.8 + newBpm * 0.2
+        }
       }
     }
     lastBassBeat = elapsed

@@ -174,9 +174,11 @@ export function beforeRender(delta) {
   if (light == -1) simulateAudio()
 
   // ---- Aggregate energy ----
+  // Bass: bins 0-3 (sub-bass + low bass) — tight range so the BPM
+  // detector tracks kicks instead of also picking up claps/snares.
   bassNow = 0
-  for (i = 0; i < 8; i++) bassNow += frequencyData[i]
-  bassNow *= 0.125
+  for (i = 0; i < 4; i++) bassNow += frequencyData[i]
+  bassNow *= 0.25
 
   trebleNow = 0
   for (i = 20; i < 32; i++) trebleNow += frequencyData[i]
@@ -206,18 +208,28 @@ export function beforeRender(delta) {
   if (bassSpike > bassBeatThresh && elapsed - lastBassBeat > minGap) {
     peakBin = 0
     peakVal = frequencyData[0]
-    for (i = 1; i < 8; i++) {
+    for (i = 1; i < 4; i++) {
       if (frequencyData[i] > peakVal) { peakVal = frequencyData[i]; peakBin = i }
     }
-    hue = peakBin / 7 * 0.14
+    hue = peakBin / 3 * 0.14
     spawnRising(hue, bassSpike)
 
     if (lastBassBeat > 0) {
       interval = elapsed - lastBassBeat
       if (interval > 0.27 && interval < 1.5) {
         newBpm = 60 / interval
-        detectedBpm = detectedBpm * 0.6 + newBpm * 0.4
-        beatPeriod = 60 / detectedBpm
+
+        // Snap to multiple of current estimate to ignore single-shot
+        // 2× / 0.5× detections (a spurious between-beat hit or a missed
+        // kick) instead of letting them poison the average.
+        ratio = newBpm / detectedBpm
+        if      (ratio > 1.6 && ratio < 2.5)  newBpm = newBpm * 0.5
+        else if (ratio > 0.4 && ratio < 0.62) newBpm = newBpm * 2
+
+        if (abs(newBpm - detectedBpm) / detectedBpm < 0.25) {
+          detectedBpm = detectedBpm * 0.8 + newBpm * 0.2
+          beatPeriod  = 60 / detectedBpm
+        }
       }
     }
     lastBassBeat = elapsed
