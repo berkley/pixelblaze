@@ -21,8 +21,7 @@ scale = 1 / (PI * PI)   // How wide the "spotlights" are
 var beatsPerSpinCtrl = 0.4   // 0 = 1 beat/turn, 1 = 8 beats/turn (default ≈ 3.8)
 export function sliderBeatsPerSpin(v) { beatsPerSpinCtrl = v }
 
-// Manual BPM override. 0 = auto-detect; otherwise maps to 60..200 BPM.
-// Useful when auto-detection picks the wrong tempo and won't recover.
+// Manual BPM. 0 = use auto-detected BPM; otherwise scales 100..150 BPM.
 var manualBpmCtrl = 0
 export function sliderManualBpm(v) { manualBpmCtrl = v }
 
@@ -92,9 +91,10 @@ export function beforeRender(delta) {
     lastBassBeat = elapsed
   }
 
-  // Manual override wins if the slider is non-zero.
-  if (manualBpmCtrl > 0.01) {
-    detectedBpm = 60 + manualBpmCtrl * 140   // 60..200 BPM
+  // Manual BPM override. Slider at 0 = use auto-detected BPM.
+  // Any non-zero value scales linearly across 100..150 BPM.
+  if (manualBpmCtrl > 0) {
+    detectedBpm = 100 + manualBpmCtrl * 50
   }
 
   // ---- Beat-locked spin ----
