@@ -9,19 +9,19 @@
   face or edge, which is easy to spot by eye.
 */
 
-export function render3D(index, x, y, z) {
-  // Pixelblaze normalizes mapper output to 0..1 world units per axis, so we
-  // can't test the original map's negative coordinates directly. Instead,
-  // find which axis is "pinned" to a wall (sitting at the 0 or 1 extreme)
-  // vs which axis sweeps across the face (the other axis, spanning 0..1).
-  ex = min(x, 1 - x)  // how close x is to an edge (0 = right at an edge)
-  ey = min(y, 1 - y)  // how close y is to an edge
+panelPixels = pixelCount / 4
 
-  if (ex < ey) {
-    h = (x < 0.5) ? 0.85 : 0.33  // left = magenta, right = green
-  } else {
-    h = (y < 0.5) ? 0 : 0.6      // front = red, back = blue
-  }
+export function render3D(index, x, y, z) {
+  // Deriving the wall from x/y is unreliable right at a seam corner: both
+  // coordinates sit near an edge simultaneously there, and Pixelblaze's
+  // mapper normalization lands them just shy of 0/1 (values are "0..1
+  // exclusive"), so tiny float noise flips which wall a corner pixel is
+  // classified as. The panel index has no such ambiguity, so use that.
+  panel = Math.floor(index / panelPixels)
+  if (panel == 0)      { h = 0    }  // front = red
+  else if (panel == 1) { h = 0.33 }  // right = green
+  else if (panel == 2) { h = 0.6  }  // back = blue
+  else                 { h = 0.85 }  // left = magenta
 
   top = z > 0.8  // top ~2 rows of an 8-row-tall panel
 
