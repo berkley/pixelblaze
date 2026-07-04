@@ -17,7 +17,7 @@ export function render3D(index, x, y, z) {
   // mapper normalization lands them just shy of 0/1 (values are "0..1
   // exclusive"), so tiny float noise flips which wall a corner pixel is
   // classified as. The panel index has no such ambiguity, so use that.
-  panel = Math.floor(index / panelPixels)
+  panel = floor(index / panelPixels)
   if (panel == 0)      { h = 0    }  // front = red
   else if (panel == 1) { h = 0.33 }  // right = green
   else if (panel == 2) { h = 0.6  }  // back = blue
