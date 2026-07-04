@@ -12,7 +12,7 @@
 export function render3D(index, x, y, z) {
   // Faces meet at corners where |x| == |y|; away from a corner, whichever
   // coordinate is larger in magnitude tells us which pair of walls we're on.
-  if (Math.abs(y) >= Math.abs(x)) {
+  if (abs(y) >= abs(x)) {
     h = (y < 0) ? 0 : 0.6      // front = red, back = blue
   } else {
     h = (x > 0) ? 0.33 : 0.85  // right = green, left = magenta
