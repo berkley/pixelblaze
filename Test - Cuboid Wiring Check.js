@@ -10,12 +10,17 @@
 */
 
 export function render3D(index, x, y, z) {
-  // Faces meet at corners where |x| == |y|; away from a corner, whichever
-  // coordinate is larger in magnitude tells us which pair of walls we're on.
-  if (abs(y) >= abs(x)) {
-    h = (y < 0) ? 0 : 0.6      // front = red, back = blue
+  // Pixelblaze normalizes mapper output to 0..1 world units per axis, so we
+  // can't test the original map's negative coordinates directly. Instead,
+  // find which axis is "pinned" to a wall (sitting at the 0 or 1 extreme)
+  // vs which axis sweeps across the face (the other axis, spanning 0..1).
+  ex = min(x, 1 - x)  // how close x is to an edge (0 = right at an edge)
+  ey = min(y, 1 - y)  // how close y is to an edge
+
+  if (ex < ey) {
+    h = (x < 0.5) ? 0.85 : 0.33  // left = magenta, right = green
   } else {
-    h = (x > 0) ? 0.33 : 0.85  // right = green, left = magenta
+    h = (y < 0.5) ? 0 : 0.6      // front = red, back = blue
   }
 
   top = z > 0.8  // top ~2 rows of an 8-row-tall panel
