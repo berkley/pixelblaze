@@ -21,6 +21,7 @@ ctlTurbulence  = 0.55  // ragged tongues vs. smooth glow
 ctlSpeed       = 0.5   // how fast flames rise
 ctlColor       = 0.05  // base flame hue (0=red, .08=orange, .15=yellow, .6=blue ...)
 ctlColorSpread = 0.5   // how far hue shifts from cool base to hot tips
+ctlColorCycle  = 0     // drift the base hue over time (0 = static color)
 ctlWhiteHot    = 0.25  // how much the hottest flame washes to white (0 = none)
 
 export function sliderIntensity(v)   { ctlIntensity   = v }
@@ -29,6 +30,7 @@ export function sliderTurbulence(v)  { ctlTurbulence  = v }
 export function sliderSpeed(v)       { ctlSpeed       = v }
 export function sliderColor(v)       { ctlColor       = v }
 export function sliderColorSpread(v) { ctlColorSpread = v }
+export function sliderColorCycle(v)  { ctlColorCycle  = v }
 export function sliderWhiteHot(v)    { ctlWhiteHot    = v }
 
 scroll = 0
@@ -40,6 +42,7 @@ intensity = 1
 hueBase = 0.05
 hueSpread = 0.08
 whiteHot = 0.25
+hueDrift = 0
 
 export function beforeRender(delta) {
   dt = delta * 0.001
@@ -53,7 +56,9 @@ export function beforeRender(delta) {
   intensity = 0.7 + ctlIntensity * 1.3
 
   // ---- color ----
-  hueBase   = ctlColor                       // full hue range: red..orange..yellow..green..blue
+  hueDrift += dt * ctlColorCycle * 0.066     // 0 = static; full spectrum ~15s at max
+  if (hueDrift > 1) hueDrift -= 1
+  hueBase   = ctlColor + hueDrift             // base hue (wraps in hsv); full spectrum
   hueSpread = ctlColorSpread * 0.16          // hue rise from base (cool) to core (hot)
   whiteHot  = ctlWhiteHot                     // 0 = stay saturated, 1 = white-hot core
 }
