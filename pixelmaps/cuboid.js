@@ -1,37 +1,38 @@
 // Pixel map for a 4-sided, closed-wall LED cuboid.
-// 4 panels wired sequentially, each an 8x32 pixel array mounted
-// 8 pixels tall x 32 pixels wide. Each panel is wired as 32 vertical
-// strips of 8 pixels, serpentine. Panels are assigned to the 4 walls in
-// order (front, left, back, right) going clockwise (viewed from
-// above), so the wiring runs continuously around the loop with matching
+// 4 panels wired sequentially. Each panel is one wall: an 8x32 LED matrix
+// mounted "portrait" -- 8 pixels wide (around the loop) x 32 pixels tall --
+// so adjacent panels touch along their long (32-pixel) vertical edges at the
+// cuboid corners. Each panel is wired as 32 horizontal rows of 8 pixels,
+// serpentine (consecutive rows alternate direction). Panels are assigned to
+// the 4 walls in order (front, left, back, right) going clockwise (viewed
+// from above), so the wiring runs continuously around the loop with matching
 // seams at each corner.
 //
-// The jumper between panels lands at whichever height is physically
-// closest, so entry side alternates per panel rather than always being
-// "top": confirmed by wiring-check test pattern on the real cuboid (front
-// and back enter at the top of their first strip, left and right at the bottom).
+// entersAtTop[] flips the vertical direction per panel for the walls whose
+// first wired row sits at the top rather than the bottom; calibrated against
+// the wiring-check test pattern on the real cuboid.
 
 function (pixelCount) {
-  var stripLen = 8    // pixels per vertical strip (panel height)
-  var cols = 32       // strips per panel (panel width)
-  var panelPixels = stripLen * cols  // 256
-  var halfSize = cols / stripLen / 2  // footprint half-width, in strip-height units
-  var entersAtTop = [true, false, true, false]  // per panel: front, left, back, right
+  var wallW = 8       // pixels around the loop, per wall (short matrix axis)
+  var wallH = 32      // pixels tall (long matrix axis)
+  var panelPixels = wallW * wallH  // 256
+  var halfSize = wallW / 2         // footprint half-width, in pixel units
+  var entersAtTop = [false, true, false, true]  // per panel: front, left, back, right
   var map = []
 
   for (i = 0; i < pixelCount; i++) {
     panel = Math.floor(i / panelPixels)
     local = i % panelPixels
-    col = Math.floor(local / stripLen)  // 0..31, which vertical strip
-    row = local % stripLen              // 0..7, position within the strip
+    strip = Math.floor(local / wallW)  // 0..31, which horizontal row (height)
+    idx = local % wallW                // 0..7, position along the row
 
-    // serpentine: even strips run top-to-bottom, odd strips bottom-to-top
-    physRow = (col % 2 == 0) ? row : (stripLen - 1 - row)
-    z = (stripLen - 1 - physRow) / (stripLen - 1)  // 0 at bottom, 1 at top
+    // serpentine: consecutive 8-pixel rows alternate direction
+    hpos = (strip % 2 == 0) ? idx : (wallW - 1 - idx)
+    u = hpos / (wallW - 1)             // 0..1 across the 8-pixel wall width
+
+    z = strip / (wallH - 1)            // 0 at first row, 1 at last
     if (!entersAtTop[panel]) z = 1 - z
-    u = col / (cols - 1)  // 0..1 across the face
 
-    // Panels wire clockwise (viewed from above): front, left, back, right.
     if (panel == 0) {        // front wall: y = -halfSize
       x = halfSize - u * (2 * halfSize)
       y = -halfSize
