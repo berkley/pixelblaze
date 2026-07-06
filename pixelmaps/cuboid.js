@@ -2,21 +2,21 @@
 // 4 panels wired sequentially, each an 8x32 pixel array mounted
 // 8 pixels tall x 32 pixels wide. Each panel is wired as 32 vertical
 // strips of 8 pixels, serpentine. Panels are assigned to the 4 walls in
-// order (front, right, back, left) going counter-clockwise (viewed from
+// order (front, left, back, right) going clockwise (viewed from
 // above), so the wiring runs continuously around the loop with matching
 // seams at each corner.
 //
 // The jumper between panels lands at whichever height is physically
 // closest, so entry side alternates per panel rather than always being
-// "top": confirmed by wiring-check test pattern (front/left enter at the
-// top of their first strip, right/back enter at the bottom).
+// "top": confirmed by wiring-check test pattern on the real cuboid (front
+// and back enter at the top of their first strip, left and right at the bottom).
 
 function (pixelCount) {
   var stripLen = 8    // pixels per vertical strip (panel height)
   var cols = 32       // strips per panel (panel width)
   var panelPixels = stripLen * cols  // 256
   var halfSize = cols / stripLen / 2  // footprint half-width, in strip-height units
-  var entersAtTop = [true, false, false, true]  // per panel: front, right, back, left
+  var entersAtTop = [true, false, true, false]  // per panel: front, left, back, right
   var map = []
 
   for (i = 0; i < pixelCount; i++) {
@@ -31,17 +31,18 @@ function (pixelCount) {
     if (!entersAtTop[panel]) z = 1 - z
     u = col / (cols - 1)  // 0..1 across the face
 
+    // Panels wire clockwise (viewed from above): front, left, back, right.
     if (panel == 0) {        // front wall: y = -halfSize
-      x = -halfSize + u * (2 * halfSize)
+      x = halfSize - u * (2 * halfSize)
       y = -halfSize
-    } else if (panel == 1) {  // right wall: x = +halfSize
-      x = halfSize
+    } else if (panel == 1) {  // left wall: x = -halfSize
+      x = -halfSize
       y = -halfSize + u * (2 * halfSize)
     } else if (panel == 2) {  // back wall: y = +halfSize
-      x = halfSize - u * (2 * halfSize)
+      x = -halfSize + u * (2 * halfSize)
       y = halfSize
-    } else {                  // left wall: x = -halfSize
-      x = -halfSize
+    } else {                  // right wall: x = +halfSize
+      x = halfSize
       y = halfSize - u * (2 * halfSize)
     }
 
