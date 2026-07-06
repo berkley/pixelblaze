@@ -18,6 +18,7 @@ function (pixelCount) {
   var panelPixels = wallW * wallH  // 256
   var halfSize = wallW / 2         // footprint half-width, in pixel units
   var entersAtTop = [false, true, false, true]  // per panel: front, left, back, right
+  var flipH = [false, true, false, true]        // panels whose horizontal wrap is reversed
   var map = []
 
   for (i = 0; i < pixelCount; i++) {
@@ -29,6 +30,7 @@ function (pixelCount) {
     // serpentine: consecutive 8-pixel rows alternate direction
     hpos = (strip % 2 == 0) ? idx : (wallW - 1 - idx)
     u = hpos / (wallW - 1)             // 0..1 across the 8-pixel wall width
+    if (flipH[panel]) u = 1 - u        // side walls wind the opposite direction
 
     z = strip / (wallH - 1)            // 0 at first row, 1 at last
     if (!entersAtTop[panel]) z = 1 - z
