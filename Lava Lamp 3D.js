@@ -25,6 +25,7 @@ var MAXB = 6
 ctlSpeed  = 0.5   // how fast the lamp runs (heating, rise, wobble)
 ctlSize   = 0.5   // blob radius
 ctlCount  = 0.8   // number of blobs, 2..6
+ctlHeight = 0.85  // how high the blobs rise before stalling and sinking
 ctlHue    = 0.0   // base hue of the first blob
 ctlSpread = 1.0   // how far the other blobs' hues fan out around the wheel
 ctlGlow   = 0.5   // brightness of the heater glow at the base
@@ -32,6 +33,7 @@ ctlGlow   = 0.5   // brightness of the heater glow at the base
 export function sliderSpeed(v)       { ctlSpeed  = v }
 export function sliderBlobSize(v)    { ctlSize   = v }
 export function sliderBlobs(v)       { ctlCount  = v }
+export function sliderRiseHeight(v)  { ctlHeight = v }
 export function sliderHue(v)         { ctlHue    = v }
 export function sliderColorSpread(v) { ctlSpread = v }
 export function sliderGlow(v)        { ctlGlow   = v }
@@ -79,6 +81,9 @@ export function beforeRender(delta) {
   nBlobs = floor(2 + ctlCount * 4.99)   // 2..6
   baseR = 0.13 + ctlSize * 0.22
   glowLevel = ctlGlow
+  // liquid temperature gradient: buoyancy fades with altitude, so this sets
+  // where a fully heated blob stalls -- ~1/4 height at 0, the top at 1
+  grad = 1.5 - ctlHeight * 1.3
 
   // wobble clock: wave() coefficients below are multiples of 1/16 so the
   // wrap at 16 lands on a whole period (no visual jump)
@@ -88,12 +93,14 @@ export function beforeRender(delta) {
   if (orb >= 1) orb -= 1
 
   for (i = 0; i < nBlobs; i++) {
-    // thermal: the heater pumps heat in near the base, ambient always cools
+    // thermal: the heater pumps heat in near the base; ambient cooling is
+    // slow -- it drives the sink-and-reheat cycle, not the stall height
     if (bz[i] < 0.16) btemp[i] += sdt * 0.17
-    btemp[i] = clamp(btemp[i] - sdt * 0.05, 0, 1)
+    btemp[i] = clamp(btemp[i] - sdt * 0.02, 0, 1)
 
-    // buoyancy vs. drag: hot wax rises, cool wax sinks, terminal ~0.07 z/s
-    bvz[i] += (btemp[i] - 0.55) * 0.07 * sdt
+    // buoyancy vs. drag: hot wax rises until the liquid's temperature
+    // gradient neutralizes it (RiseHeight slider), cool wax sinks
+    bvz[i] += (btemp[i] - 0.55 - bz[i] * grad) * 0.07 * sdt
     bvz[i] -= bvz[i] * 0.5 * sdt
     bz[i] += bvz[i] * sdt
     if (bz[i] < 0.06) { bz[i] = 0.06; if (bvz[i] < 0) bvz[i] = 0 }
