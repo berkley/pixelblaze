@@ -4,10 +4,13 @@
   The cuboid is the lamp: a warm heater glow sits at the base, and colorful
   blobs of "wax" form there, heat up, rise with a wobble, flex and stretch,
   stall as they cool near the top, then sink back down to reheat. The four
-  walls are the glass -- each pixel shows the 3D metaball field evaluated at
-  its position on the glass, so blobs brighten as they drift near a wall and
-  glow softly through the liquid when they're mid-tank. Overlapping blobs
-  merge organically (metaball field sum).
+  walls are the glass, and the liquid is transparent: each wall renders every
+  blob by orthographic projection straight through the tank (horizontal +
+  height position only, depth ignored except for a mild haze), so the same
+  blob is visible from all four sides at its true world position, just like
+  looking through a real lamp. Blobs physically collide -- they push apart,
+  ooze around each other, and exchange heat, mutating both trajectories --
+  and their metaball fields merge organically while they're in contact.
 
   Uses the hardware-validated cuboid map (z=0 bottom, z=1 top; x,y span the
   square footprint with the walls at the 0/1 edges).
@@ -45,12 +48,15 @@ var zAspect = 0.35  // vertical shape of a blob: walls are 8px wide x 32px
 var THRESH  = 0.5   // field level where a blob surface starts
 var EDGE    = 1.6   // how hard the blob edge ramps from the threshold
 var HALO    = 2     // kernel support radius, in blob radii (soft halo size)
+var HAZE    = 0.25  // how much the liquid dims a blob seen from the far wall
 
 // ---- blob state ----
 bx    = array(MAXB)  // position
 by    = array(MAXB)
 bz    = array(MAXB)
-bvz   = array(MAXB)  // vertical velocity
+bvx   = array(MAXB)  // velocity (horizontal motion is physical so collision
+bvy   = array(MAXB)  //   impulses persist instead of being overwritten)
+bvz   = array(MAXB)
 btemp = array(MAXB)  // temperature: >0.55 rises, <0.55 sinks
 bang  = array(MAXB)  // home angle in the footprint
 bph   = array(MAXB)  // wobble phase offset
@@ -58,13 +64,20 @@ bir2  = array(MAXB)  // per-frame: 1 / (support radius)^2
 bzi   = array(MAXB)  // per-frame: 1 / (zAspect * stretch)
 bspan = array(MAXB)  // per-frame: vertical reach in z units, for cheap culling
 bhue  = array(MAXB)
+// per-frame, per wall (front/back/left/right blocks of MAXB):
+proj  = array(4 * MAXB)  // blob's horizontal coordinate projected onto the wall
+att   = array(4 * MAXB)  // haze dimming by distance behind that wall
 
 // stagger the blobs through the rise/sink cycle so they don't move in unison
 for (i = 0; i < MAXB; i++) {
   bang[i]  = i / MAXB
   bph[i]   = i * 2.6
+  bx[i]    = 0.5 + cos(bang[i] * PI2) * 0.2
+  by[i]    = 0.5 + sin(bang[i] * PI2) * 0.2
   bz[i]    = 0.06 + (i % 3) * 0.31
   btemp[i] = 0.25 + (i * 0.13) % 0.55
+  bvx[i]   = 0
+  bvy[i]   = 0
   bvz[i]   = 0
 }
 
@@ -106,11 +119,22 @@ export function beforeRender(delta) {
     if (bz[i] < 0.06) { bz[i] = 0.06; if (bvz[i] < 0) bvz[i] = 0 }
     if (bz[i] > 0.94) { bz[i] = 0.94; if (bvz[i] > 0) bvz[i] = 0 }
 
-    // home point orbits the center slowly; wobble meanders around it
+    // horizontal wander: a meandering force plus a gentle spring toward a
+    // slowly orbiting home point; velocity-based so collisions can shove
     ang = (bang[i] + orb) * PI2
     w = wclock + bph[i]
-    bx[i] = 0.5 + cos(ang) * 0.17 + (wave(w * 0.6875) - 0.5) * 0.26
-    by[i] = 0.5 + sin(ang) * 0.17 + (wave(w * 0.9375) - 0.5) * 0.26
+    hx = 0.5 + cos(ang) * 0.15
+    hy = 0.5 + sin(ang) * 0.15
+    bvx[i] += ((wave(w * 0.6875) - 0.5) * 0.06 + (hx - bx[i]) * 0.08) * sdt
+    bvy[i] += ((wave(w * 0.9375) - 0.5) * 0.06 + (hy - by[i]) * 0.08) * sdt
+    bvx[i] -= bvx[i] * 0.8 * sdt
+    bvy[i] -= bvy[i] * 0.8 * sdt
+    bx[i] += bvx[i] * sdt
+    by[i] += bvy[i] * sdt
+    if (bx[i] < 0.12) { bx[i] = 0.12; if (bvx[i] < 0) bvx[i] = 0 }
+    if (bx[i] > 0.88) { bx[i] = 0.88; if (bvx[i] > 0) bvx[i] = 0 }
+    if (by[i] < 0.12) { by[i] = 0.12; if (bvy[i] < 0) bvy[i] = 0 }
+    if (by[i] > 0.88) { by[i] = 0.88; if (bvy[i] > 0) bvy[i] = 0 }
 
     // flexing: radius slowly pulses; rising/sinking blobs stretch vertically
     r = HALO * baseR * (0.85 + 0.3 * wave(w * 1.1875))
@@ -120,10 +144,51 @@ export function beforeRender(delta) {
     bspan[i] = r * stretch   // beyond this |z - bz|, the kernel is zero
 
     bhue[i] = ctlHue + i * ctlSpread / MAXB
+
+    // projection tables for the see-through render: front/back walls see the
+    // blob at its x, side walls at its y; haze dims with distance behind
+    proj[i]            = bx[i]
+    proj[MAXB + i]     = bx[i]
+    proj[2 * MAXB + i] = by[i]
+    proj[3 * MAXB + i] = by[i]
+    att[i]             = 1 - by[i] * HAZE        // front wall (y=0)
+    att[MAXB + i]      = 1 - (1 - by[i]) * HAZE  // back  (y=1)
+    att[2 * MAXB + i]  = 1 - bx[i] * HAZE        // left  (x=0)
+    att[3 * MAXB + i]  = 1 - (1 - bx[i]) * HAZE  // right (x=1)
+  }
+
+  // collisions: overlapping blobs push apart like immiscible oil, and
+  // exchange heat so a collision mutates both blobs' rise/sink cycles
+  minD = baseR * 1.9
+  for (i = 0; i < nBlobs - 1; i++) {
+    for (j = i + 1; j < nBlobs; j++) {
+      ddx = bx[j] - bx[i]
+      ddy = by[j] - by[i]
+      ddz = (bz[j] - bz[i]) / zAspect   // compare in round-blob space
+      d2 = ddx * ddx + ddy * ddy + ddz * ddz
+      if (d2 < minD * minD) {
+        d = sqrt(d2) + 0.001
+        push = (minD - d) * 0.8 * sdt / d   // soft spring, so they ooze apart
+        bvx[i] -= ddx * push; bvx[j] += ddx * push
+        bvy[i] -= ddy * push; bvy[j] += ddy * push
+        pz = ddz * push * zAspect
+        bvz[i] -= pz; bvz[j] += pz
+        mt = (btemp[i] + btemp[j]) * 0.5
+        btemp[i] += (mt - btemp[i]) * sdt
+        btemp[j] += (mt - btemp[j]) * sdt
+      }
+    }
   }
 }
 
 export function render3D(index, x, y, z) {
+  // which pane of glass is this pixel on? wb indexes that wall's block in
+  // the proj/att tables; u is the pixel's horizontal position on the pane
+  if (y < 0.01)      { wb = 0;        u = x }
+  else if (y > 0.99) { wb = MAXB;     u = x }
+  else if (x < 0.01) { wb = 2 * MAXB; u = y }
+  else               { wb = 3 * MAXB; u = y }
+
   f = 0
   best = 0
   hue = 0
@@ -131,12 +196,11 @@ export function render3D(index, x, y, z) {
     // cheap vertical-band cull before the full distance math
     dz = z - bz[i]
     if (dz < bspan[i] && -dz < bspan[i]) {
-      dx = x - bx[i]
-      dy = y - by[i]
+      du = u - proj[wb + i]   // see-through: depth doesn't move or shrink it
       dz *= bzi[i]
-      q = 1 - (dx * dx + dy * dy + dz * dz) * bir2[i]
+      q = 1 - (du * du + dz * dz) * bir2[i]
       if (q > 0) {
-        c = q * q
+        c = q * q * att[wb + i]
         f += c
         if (c > best) { best = c; hue = bhue[i] }
       }
@@ -158,5 +222,5 @@ export function render3D(index, x, y, z) {
   }
 }
 
-export function render2D(index, x, y) { render3D(index, x, 0.5, y) }
-export function render(index) { render3D(index, 0.5, 0.5, index / pixelCount) }
+export function render2D(index, x, y) { render3D(index, x, 0, y) }
+export function render(index) { render3D(index, 0.5, 0, index / pixelCount) }
