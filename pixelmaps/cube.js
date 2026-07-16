@@ -1,4 +1,7 @@
 function (pixelCount) {
+  // Set to true to flip the map vertically (up ↔ down).
+  var flipVertical = false
+
   width = 16
   function side(targets, offsets) {
     var matrix = [], coords, row, col
@@ -22,5 +25,14 @@ function (pixelCount) {
   map = map.concat(side([1, 0, -2], [0, width - 1 + gap, 0]))
   map = map.concat(side([0, -1, -2], [width - 1 + gap, 0, 0]))
   map = map.concat(side([-1, 0, -2], [0, -gap, 0]))
+
+  if (flipVertical) {
+    // z spans 0 .. (width - 1 + gap). Reflect each pixel's z about the midpoint.
+    var maxZ = width - 1 + gap
+    for (var i = 0; i < map.length; i++) {
+      map[i][2] = maxZ - map[i][2]
+    }
+  }
+
   return map
 }
