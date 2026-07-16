@@ -49,6 +49,7 @@ var THRESH  = 0.5   // field level where a blob surface starts
 var EDGE    = 1.6   // how hard the blob edge ramps from the threshold
 var HALO    = 2     // kernel support radius, in blob radii (soft halo size)
 var HAZE    = 0.25  // how much the liquid dims a blob seen from the far wall
+var wallStep = 1 / MAXB  // turns a proj/att block offset back into a wall number
 
 // ---- blob state ----
 bx    = array(MAXB)  // position
@@ -85,6 +86,10 @@ wclock = 0
 orb = 0
 nBlobs = 4
 glowLevel = 0.5
+fl1 = 0
+fl2 = 0
+ft = 0
+gfl = 1
 
 export function beforeRender(delta) {
   dt = delta * 0.001
@@ -104,6 +109,17 @@ export function beforeRender(delta) {
   if (wclock >= 16) wclock -= 16
   orb += sdt * 0.02                     // slow orbit of the home positions
   if (orb >= 1) orb -= 1
+
+  // fire clocks for the heater flames: real-time rates (not the Speed
+  // slider) so the fire dances fast even when the lava is glacial; wave()
+  // coefficients on fl1/fl2 are 1, so wrapping at 16 lands on a whole period
+  fl1 += dt * 0.9
+  if (fl1 >= 16) fl1 -= 16
+  fl2 += dt * 1.4
+  if (fl2 >= 16) fl2 -= 16
+  ft += dt * 2.2
+  if (ft >= 16) ft -= 16
+  gfl = 0.75 + 0.25 * wave(ft)          // global fast flicker
 
   for (i = 0; i < nBlobs; i++) {
     // thermal: the heater pumps heat in near the base; ambient cooling is
@@ -215,10 +231,16 @@ export function render3D(index, x, y, z) {
     // glossy hot core: desaturate a touch where the field is strongest
     sat = 1 - clamp((f - 1.1) * 0.5, 0, 0.35)
     hsv(hue, sat, v)
+  } else if (z < 0.45) {
+    // the heater is a fire: two drifting waves along the perimeter make
+    // flame tongues that vary in height and brightness, red at the roots
+    // shifting toward yellow in the hottest spots
+    s = u + wb * wallStep             // rough perimeter coordinate
+    n = wave(s * 3 + fl1) * 0.6 + wave(s * 5 - fl2) * 0.4
+    g = clamp(1 - z * (4.6 - 2.3 * n), 0, 1)
+    hsv(0.015 + 0.045 * n * g, 1, g * g * (0.35 + 0.55 * n) * gfl * glowLevel * 1.3)
   } else {
-    // the liquid: warm heater glow at the base fading to dark above
-    g = clamp(1 - z * 3.3, 0, 1)
-    hsv(0.02, 1, g * g * glowLevel * 0.55)
+    hsv(0, 0, 0)
   }
 }
 
