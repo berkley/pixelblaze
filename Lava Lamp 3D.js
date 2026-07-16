@@ -25,13 +25,14 @@
 var MAXB = 6
 
 // ---- control values (driven by the slider handlers below) ----
-ctlSpeed  = 0.5   // how fast the lamp runs (heating, rise, wobble)
-ctlSize   = 0.5   // blob radius
-ctlCount  = 0.8   // number of blobs, 2..6
-ctlHeight = 0.85  // how high the blobs rise before stalling and sinking
-ctlHue    = 0.0   // base hue of the first blob
-ctlSpread = 1.0   // how far the other blobs' hues fan out around the wheel
-ctlGlow   = 0.5   // brightness of the heater glow at the base
+// defaults are Chad's dialed-in settings from the real cuboid, 2026-07-16
+ctlSpeed  = 1      // how fast the lamp runs (heating, rise, wobble)
+ctlSize   = 0.31   // blob radius
+ctlCount  = 0.26   // number of blobs, 2..6 (0.26 -> 3 blobs)
+ctlHeight = 0.925  // how high the blobs rise before stalling and sinking
+ctlHue    = 0.755  // base hue of the first blob
+ctlSpread = 0.705  // how far the other blobs' hues fan out around the wheel
+ctlGlow   = 0.375  // brightness of the heater glow at the base
 
 export function sliderSpeed(v)       { ctlSpeed  = v }
 export function sliderBlobSize(v)    { ctlSize   = v }
