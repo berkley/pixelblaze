@@ -100,8 +100,9 @@ export function beforeRender(delta) {
   baseR = 0.13 + ctlSize * 0.22
   glowLevel = ctlGlow
   // liquid temperature gradient: buoyancy fades with altitude, so this sets
-  // where a fully heated blob stalls -- ~1/4 height at 0, the top at 1
-  grad = 1.5 - ctlHeight * 1.3
+  // where a fully heated blob stalls -- ~1/4 height at 0; at max the
+  // gradient vanishes entirely so blobs ride all the way to the top
+  grad = (1 - ctlHeight) * 1.5
 
   // wobble clock: wave() coefficients below are multiples of 1/16 so the
   // wrap at 16 lands on a whole period (no visual jump)
@@ -125,7 +126,7 @@ export function beforeRender(delta) {
     // thermal: the heater pumps heat in near the base; ambient cooling is
     // slow -- it drives the sink-and-reheat cycle, not the stall height
     if (bz[i] < 0.16) btemp[i] += sdt * 0.17
-    btemp[i] = clamp(btemp[i] - sdt * 0.02, 0, 1)
+    btemp[i] = clamp(btemp[i] - sdt * 0.014, 0, 1)
 
     // buoyancy vs. drag: hot wax rises until the liquid's temperature
     // gradient neutralizes it (RiseHeight slider), cool wax sinks
@@ -133,7 +134,7 @@ export function beforeRender(delta) {
     bvz[i] -= bvz[i] * 0.5 * sdt
     bz[i] += bvz[i] * sdt
     if (bz[i] < 0.06) { bz[i] = 0.06; if (bvz[i] < 0) bvz[i] = 0 }
-    if (bz[i] > 0.94) { bz[i] = 0.94; if (bvz[i] > 0) bvz[i] = 0 }
+    if (bz[i] > 0.96) { bz[i] = 0.96; if (bvz[i] > 0) bvz[i] = 0 }
 
     // horizontal wander: a meandering force plus a gentle spring toward a
     // slowly orbiting home point; velocity-based so collisions can shove
