@@ -16,9 +16,19 @@
   leaves behind is the whole effect -- a particle keeps coasting when the gust
   drops, and banks into a turn instead of snapping to it.
 
-  A BEAT does two things: it jumps the noise field's z coordinate, so the whole
-  flow re-shuffles and particles visibly change heading; and it spawns a burst at
-  whichever edge is currently upwind, so density pulses with the music.
+  A BEAT does three things: it jumps the noise field's z coordinate, so the whole
+  flow re-shuffles and particles visibly change heading; it spawns a burst at
+  whichever edge is currently upwind, so density pulses with the music; and it
+  launches a GLITCH WAVEFRONT from that same edge.
+
+  The front sweeps the bar in about half a second and disrupts only what it is
+  currently passing over, so the damage visibly emanates from the hit instead of
+  happening everywhere at once. A particle caught by it either jumps position
+  (which snaps its tail into a dash), takes a velocity spike that flings it off
+  the flow, or has its colour rebound to a random bin. Rows of the framebuffer
+  are also torn sideways while the pulse is strong; since the buffer holds the
+  tails, a torn row stays torn and decays, smearing rather than flickering.
+  `Glitch` at 0 disables all of it.
 
   COLOUR comes from the spectrum. Each particle is bound to one of the 32 FFT
   bins, chosen at spawn by sampling three bins and keeping the loudest, so the
@@ -76,6 +86,11 @@ export function sliderSensitivity(v) { sensitivityCtrl = v }
 var bassBoostCtrl = 0.75
 export function sliderBassBoost(v) { bassBoostCtrl = v }
 
+// How hard the beat glitches the field. At 0 the pattern behaves exactly as it
+// did before glitching was added.
+var glitchCtrl = 0.45
+export function sliderGlitch(v) { glitchCtrl = v }
+
 // ---- Sensor board inputs ----
 export var light         = -1
 export var frequencyData = array(32)
@@ -127,16 +142,26 @@ pvy   = array(maxParticles)
 pbin  = array(maxParticles)
 plife = array(maxParticles)   // remaining seconds; <= 0 means the slot is free
 pmax  = array(maxParticles)   // total lifespan, for the fade envelope
+pdrag = array(maxParticles)   // per-particle responsiveness multiplier
 
 // ---- Trail framebuffer, indexed by pixel index ----
 pixHue = array(gridSize)
 pixVal = array(gridSize)
 idxOf  = array(gridSize)      // grid position (row * barW + col) -> pixel index
+scratch = array(barW)         // one row, for tearing
 
 spawnAccum = 0
 decay = 0.5
 frames = 0
 mapped = 0
+
+// ---- Glitch state ----
+// A beat starts a wavefront at the edge the burst spawned from. The front
+// sweeps along the bar and glitches whatever it passes over, so the disruption
+// visibly emanates from the hit rather than happening everywhere at once.
+glitchPulse = 0
+glitchX     = 0
+glitchFront = 0
 
 for (initIdx = 0; initIdx < maxParticles; initIdx++) plife[initIdx] = 0
 
@@ -163,6 +188,29 @@ function pickBassBin() {
   return best
 }
 
+// Slide one row of the framebuffer sideways, wrapping. Because the buffer
+// carries the tails, a torn row stays torn and then decays away, which is what
+// gives the displacement its datamosh smear rather than a one-frame flicker.
+// Hue and value are shifted in separate passes so only one scratch row is
+// needed; the array budget will not take a second.
+function tearRow(r, k) {
+  base = r * barW
+  for (c = 0; c < barW; c++) scratch[c] = pixVal[idxOf[base + c]]
+  for (c = 0; c < barW; c++) {
+    sc = c - k
+    sc = sc % barW
+    if (sc < 0) sc += barW
+    pixVal[idxOf[base + c]] = scratch[sc]
+  }
+  for (c = 0; c < barW; c++) scratch[c] = pixHue[idxOf[base + c]]
+  for (c = 0; c < barW; c++) {
+    sc = c - k
+    sc = sc % barW
+    if (sc < 0) sc += barW
+    pixHue[idxOf[base + c]] = scratch[sc]
+  }
+}
+
 // Spawn at whichever end is upwind, nudged a random distance inboard so
 // arrivals don't line up along the edge.
 function spawnOne(useBass) {
@@ -176,6 +224,10 @@ function spawnOne(useBass) {
       pbin[s] = useBass ? pickBassBin() : pickBin()
       pmax[s] = randRange(3, 8)
       plife[s] = pmax[s]
+      // Vary how hard each particle resists the wind. Without this every
+      // particle has identical inertia and neighbours move in lockstep, which
+      // reads as one sheet sliding rather than a scatter of leaves.
+      pdrag[s] = randRange(0.55, 1.7)
       return 1
     }
   }
@@ -275,6 +327,11 @@ export function beforeRender(delta) {
     beatCount++
     turbSeed += 7 + random(40)      // re-shuffle the flow field
     if (turbSeed >= 4096) turbSeed -= 4096
+
+    // Start a glitch wavefront at the edge this burst enters from.
+    glitchPulse = min(bassSpike, 1)
+    glitchX = windX >= 0 ? 0 : barW - 1
+    glitchFront = 0
     // Burst size grows with the gap left to fill, so a high Particles setting
     // actually reaches its target. With a fixed burst size the top half of the
     // slider did almost nothing -- 0.55, 0.8 and 1.0 all settled near 80.
@@ -300,6 +357,20 @@ export function beforeRender(delta) {
     spawnAccum = 0
   }
 
+  // ---- Glitch wavefront ----
+  // 440 px/s against a 0.4s pulse reaches 176px, comfortably past the 160px
+  // bar. At 320 it only made 128px and the downwind end never glitched at all.
+  glitchStep = dt * 440
+  glitchFront += glitchStep
+  glitchPulse -= dt / 0.4
+  if (glitchPulse < 0) glitchPulse = 0
+  glitchNow = glitchPulse * glitchCtrl
+  // The band has to be wider than the distance the front travels in one frame,
+  // or it steps clean over particles and they are never touched. At 10 fps the
+  // front moves 44px a frame against a fixed 40px band, so coverage was patchy
+  // exactly when the framerate was worst.
+  glitchBand = 20 + glitchStep * 0.6
+
   // ---- Integrate + splat ----
   turbAmp = 15 + turbCtrl * 55
   resp = 2.5                     // low, so particles carry momentum
@@ -316,13 +387,41 @@ export function beforeRender(delta) {
 
     nx = px[i] * 0.035
     ny = py[i] * 0.09
-    tvx = perlin(nx, ny, zc, 0)
-    tvy = perlin(nx + 31.7, ny + 17.3, zc, 0)
+    // Split the swarm across 8 slightly offset slices of the noise field.
+    // Sampling one shared field made particles at similar positions follow
+    // near-identical paths, which looked far too orderly for wind.
+    zp = zc + (i % 8) * 0.37
+    tvx = perlin(nx, ny, zp, 0)
+    tvy = perlin(nx + 31.7, ny + 17.3, zp, 0)
 
     // Vertical room is only 16px against 160 horizontal, so the vertical
     // component is scaled back or particles just slam between the edges.
-    vx = pvx[i] + (windX + tvx * turbAmp - pvx[i]) * resp * dt
-    vy = pvy[i] + (tvy * turbAmp * 0.45 - pvy[i]) * resp * dt
+    rp = resp * pdrag[i]
+    vx = pvx[i] + (windX + tvx * turbAmp - pvx[i]) * rp * dt
+    vy = pvy[i] + (tvy * turbAmp * 0.45 - pvy[i]) * rp * dt
+
+    // ---- Glitch: only particles the wavefront is currently crossing ----
+    if (glitchNow > 0.002) {
+      gd = px[i] - glitchX
+      if (gd < 0) gd = -gd
+      if (gd > barW * 0.5) gd = barW - gd     // x wraps, so measure the short way
+      if (abs(gd - glitchFront) < glitchBand && random(1) < glitchNow) {
+        gk = random(1)
+        if (gk < 0.45) {
+          // hard displacement: breaks the tail into a dash
+          px[i] += (random(1) * 2 - 1) * 22
+          py[i] += (random(1) * 2 - 1) * 3
+        } else if (gk < 0.75) {
+          // velocity spike: particle is flung off the flow for a moment
+          vx += (random(1) * 2 - 1) * 130
+          vy += (random(1) * 2 - 1) * 55
+        } else {
+          // colour corruption: rebind to a random bin
+          pbin[i] = floor(random(bins))
+        }
+      }
+    }
+
     pvx[i] = vx
     pvy[i] = vy
 
@@ -374,6 +473,19 @@ export function beforeRender(delta) {
       }
     }
   }
+  // ---- Row tearing ----
+  // Only while the pulse is still strong, so tears land on the beat and are
+  // gone before the next one. Two rows a frame at most: each costs four passes
+  // over a 160-pixel row and this runs on an already tight frame budget.
+  if (mapped && glitchNow > 0.25) {
+    tears = 1 + floor(random(2))
+    for (tq = 0; tq < tears; tq++) {
+      if (random(1) < glitchNow) {
+        tearRow(floor(random(barH)), floor((random(1) * 2 - 1) * 14))
+      }
+    }
+  }
+
   activeParticles = alive
 }
 
