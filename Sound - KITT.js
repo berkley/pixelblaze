@@ -70,31 +70,46 @@ totAvg       = 0
 totPeak      = 0
 
 // ---- Geometry ----
-barW = 160
-barH = 16
-gridSize = barW * barH
+// The scan quantises positions to QMAX steps while counting how many distinct
+// ones exist; it only has to exceed the finest display this will meet.
+QMAX = 256
+MAXCOLS = 256
+colSeen = array(QMAX)   // presence flags, then rewritten in place as rank table
+nCols = 1
 
 // The scanner lights a full-height column, so only the column index is needed
 // per pixel -- no row lookup, and one 2560-element array instead of two.
-colOf = array(gridSize)
-colV  = array(barW)    // trail brightness per column
+colOf = array(pixelCount)   // pixel index -> its dense column
+colV  = array(MAXCOLS)      // trail brightness per column
 
 sweepPhase = 0
 lastLeader = 0
 lastDir    = 1   // sign of the leader's travel, for detecting turnarounds
 hue = 0
 frames = 0
-mapped = 0
+phase = 0        // 0 = scanning, 1 = assigning, 2 = running
 
 export function beforeRender(delta) {
   dt = delta * 0.001
   if (dt > 0.05) dt = 0.05
   elapsed += dt
 
-  // One full render pass has completed by the second beforeRender, so colOf[]
-  // is populated.
   frames++
-  if (frames >= 2) mapped = 1
+
+  // ---- Startup: measure how many distinct columns this display has ----
+  if (phase == 0) {
+    if (frames >= 2) {
+      n = 0
+      for (q = 0; q < QMAX; q++) {
+        if (colSeen[q] > 0) { colSeen[q] = n; n++ } else colSeen[q] = -1
+      }
+      nCols = n > 0 ? n : 1
+      if (nCols > MAXCOLS) nCols = MAXCOLS
+      phase = 1
+    }
+    return
+  }
+  if (phase == 1) { phase = 2; return }
 
   dw = delta / 2000
 
@@ -158,7 +173,7 @@ export function beforeRender(delta) {
   sweepPhase += dt * (detectedBpm / 60) / (beatsPerSweep * 2)
   if (sweepPhase >= 1) sweepPhase -= 1
 
-  leaderX = triangle(sweepPhase) * (barW - 1)
+  leaderX = triangle(sweepPhase) * (nCols - 1)
 
   // ---- Trail ----
   // Half-life in seconds rather than a per-frame multiply: the framerate on this
@@ -166,7 +181,7 @@ export function beforeRender(delta) {
   // with it. Loud passages shorten the trail slightly.
   halfLife = (0.05 + trailCtrl * 0.55) * (1 - energyNorm * 0.3)
   fade = pow(0.5, dt / max(halfLife, 0.02))
-  for (c = 0; c < barW; c++) colV[c] *= fade
+  for (c = 0; c < nCols; c++) colV[c] *= fade
 
   // Light every column between the last leader position and this one, so a fast
   // sweep leaves a continuous streak rather than dashes.
@@ -181,23 +196,26 @@ export function beforeRender(delta) {
   // the end it just bounced off.
   dir = leaderX - lastLeader
   if (dir > 0 && lastDir <= 0) lo = 0              // just bounced off the left
-  else if (dir < 0 && lastDir >= 0) hi = barW - 1  // just bounced off the right
+  else if (dir < 0 && lastDir >= 0) hi = nCols - 1  // just bounced off the right
   if (dir != 0) lastDir = dir
 
   c = floor(lo)
   while (c <= hi) {
-    if (c >= 0 && c < barW) colV[c] = 1
+    if (c >= 0 && c < nCols) colV[c] = 1
     c++
   }
   lastLeader = leaderX
 }
 
 export function render3D(index, x, y, z) {
-  if (!mapped) {
-    // First pass: learn this pixel's column. Rounding to the nearest of the 160
-    // known positions rather than binning -- the mapper places pixels at exactly
-    // col/159, and floor(x * 160) would drop the last column into a 161st bin.
-    colOf[index] = round(x * (barW - 1))
+  if (phase == 0) {
+    // Pass 1: record which quantised column positions this display has.
+    colSeen[round(x * (QMAX - 1))] = 1
+    hsv(0, 0, 0)
+  } else if (phase == 1) {
+    // Pass 2: ranks exist, so give this pixel its dense column.
+    c = colSeen[round(x * (QMAX - 1))]
+    colOf[index] = c < 0 ? 0 : c
     hsv(0, 0, 0)
   } else {
     v = colV[colOf[index]]
@@ -212,7 +230,7 @@ export function render2D(index, x, y) {
 
 export function render(index) {
   // No map: fall back to the stock 1D behaviour over the raw index.
-  v = colV[floor(index / pixelCount * barW)]
+  v = colV[floor(index / pixelCount * nCols)]
   v = v * v * v
   hsv(hue, 1, v)
 }

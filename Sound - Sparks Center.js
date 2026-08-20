@@ -66,22 +66,25 @@ elapsed      = 0
 beatPhase    = 0
 
 // ---- Geometry ----
-barW = 160
-barH = 16
-gridSize = barW * barH
-midX = barW / 2
+// The scan quantises positions to QMAX steps while counting how many distinct
+// ones exist; it only has to exceed the finest display this will meet.
+QMAX = 256
+MAXCOLS = 256
+colSeen = array(QMAX)   // presence flags, then rewritten in place as rank table
+nCols = 1
+midX = 0                // set once the width is known
 
-numSparks = 32          // scaled to the 160 columns, not the 2560 pixels
+numSparks = 32          // scaled to the column count, not the pixel count
 sparkE = array(numSparks)   // signed energy: sign is the direction of travel
 sparkX = array(numSparks)   // position along the bar, 0..159
 
 // Sparks light a full-height column, so only the column index is needed per
 // pixel -- one 2560-element array instead of two.
-colOf   = array(gridSize)
-colHeat = array(barW)
+colOf   = array(pixelCount)   // pixel index -> its dense column
+colHeat = array(MAXCOLS)
 
 frames = 0
-mapped = 0
+phase = 0        // 0 = scanning, 1 = assigning, 2 = running
 
 for (initIdx = 0; initIdx < numSparks; initIdx++) sparkE[initIdx] = 0
 
@@ -99,7 +102,22 @@ export function beforeRender(delta) {
   elapsed += dt
 
   frames++
-  if (frames >= 2) mapped = 1
+
+  // ---- Startup: measure how many distinct columns this display has ----
+  if (phase == 0) {
+    if (frames >= 2) {
+      n = 0
+      for (q = 0; q < QMAX; q++) {
+        if (colSeen[q] > 0) { colSeen[q] = n; n++ } else colSeen[q] = -1
+      }
+      nCols = n > 0 ? n : 1
+      if (nCols > MAXCOLS) nCols = MAXCOLS
+      phase = 1
+    }
+    return
+  }
+  if (phase == 1) { phase = 2; return }
+  midX = nCols / 2
 
   dw = delta / 2000
 
@@ -153,11 +171,13 @@ export function beforeRender(delta) {
   // ---- Cool the heat already deposited ----
   halfLife = 0.06 + coolCtrl * 0.5
   fade = pow(0.5, dt / halfLife)
-  for (c = 0; c < barW; c++) colHeat[c] *= fade
+  for (c = 0; c < nCols; c++) colHeat[c] *= fade
 
   // ---- Move the sparks ----
   // Friction is per-second here, not per-frame as in the stock pattern, so
   // reach does not change with framerate.
+  // Per-second, and scaled to the measured width so reach is the same fraction
+  // of the display whatever its resolution.
   friction = (0.9 - reachCtrl * 0.75) * 60
   live = 0
   for (s = 0; s < numSparks; s++) {
@@ -172,8 +192,9 @@ export function beforeRender(delta) {
     }
 
     prevX = sparkX[s]
-    x = prevX + e * 60 * dt
-    if (x >= barW || x < 0) { sparkE[s] = 0; continue }
+    // e is in display-widths per second; multiply by nCols for cell units.
+    x = prevX + e * 0.375 * nCols * dt
+    if (x >= nCols || x < 0) { sparkE[s] = 0; continue }
 
     sparkX[s] = x
     sparkE[s] = e
@@ -191,7 +212,7 @@ export function beforeRender(delta) {
     c0 = floor(min(prevX, x))
     c1 = floor(max(prevX, x))
     while (c0 <= c1) {
-      if (c0 >= 0 && c0 < barW) colHeat[c0] += heat
+      if (c0 >= 0 && c0 < nCols) colHeat[c0] += heat
       c0++
     }
   }
@@ -199,11 +220,14 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  if (!mapped) {
-    // First pass: learn this pixel's column. Rounding to the nearest of the 160
-    // known positions rather than binning -- the mapper places pixels at exactly
-    // col/159, and floor(x * 160) would drop the last column into a 161st bin.
-    colOf[index] = round(x * (barW - 1))
+  if (phase == 0) {
+    // Pass 1: record which quantised column positions this display has.
+    colSeen[round(x * (QMAX - 1))] = 1
+    hsv(0, 0, 0)
+  } else if (phase == 1) {
+    // Pass 2: ranks exist, so give this pixel its dense column.
+    c = colSeen[round(x * (QMAX - 1))]
+    colOf[index] = c < 0 ? 0 : c
     hsv(0, 0, 0)
   } else {
     v = colHeat[colOf[index]]
@@ -220,7 +244,7 @@ export function render2D(index, x, y) {
 
 export function render(index) {
   // No map: fall back to 1D over the raw index.
-  v = colHeat[floor(index / pixelCount * barW)]
+  v = colHeat[floor(index / pixelCount * nCols)]
   v = v * v
   hsv(.63, 1 - v, v)
 }

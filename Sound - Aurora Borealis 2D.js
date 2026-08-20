@@ -66,9 +66,15 @@ elapsed      = 0
 beatPhase    = 0
 
 // ---- Geometry ----
-barW = 160
-barH = 16
-gridSize = barW * barH
+// The scan quantises positions to QMAX steps while counting how many distinct
+// ones exist; it only has to exceed the finest display this will meet.
+QMAX = 256
+MAXCOLS = 256
+MAXROWS = 256
+colSeen = array(QMAX)   // presence flags, then rewritten as rank tables
+rowSeen = array(QMAX)
+nCols = 1
+nRows = 1
 
 // ---- Palette (the original's five colours, 0..1) ----
 palR = array(5); palG = array(5); palB = array(5)
@@ -90,13 +96,13 @@ wDir   = array(maxWaves)
 wSpeed = array(maxWaves)
 
 // Column colour field, and the per-pixel lookups.
-colR = array(barW); colG = array(barW); colB = array(barW)
-rowMul = array(barH)
-colOf = array(gridSize)
-rowOf = array(gridSize)
+colR = array(MAXCOLS); colG = array(MAXCOLS); colB = array(MAXCOLS)
+rowMul = array(MAXROWS)
+colOf = array(pixelCount)
+rowOf = array(pixelCount)
 
 frames = 0
-mapped = 0
+phase = 0        // 0 = scanning, 1 = assigning, 2 = running
 numWaves = 6
 
 for (initIdx = 0; initIdx < maxWaves; initIdx++) wTtl[initIdx] = -1
@@ -125,19 +131,43 @@ function spawn(s) {
   wTtl[s] = 6 + random(12)                    // seconds
   wCol[s] = pickColor()
   wAlpha[s] = 0.5 + random(0.5)
-  wWidth[s] = (0.06 + random(widthCtrl)) * barW
-  wCent[s] = random(barW)
+  wWidth[s] = (0.06 + random(widthCtrl)) * nCols
+  wCent[s] = random(nCols)
   wDir[s] = random(1) >= 0.5 ? 1 : -1
-  wSpeed[s] = (4 + random(14)) * (0.4 + speedCtrl * 1.6)   // columns per second
+  // Widths per second, scaled to the measured grid.
+  wSpeed[s] = (0.025 + random(0.0875)) * nCols * (0.4 + speedCtrl * 1.6)
 }
 
+// Nothing extra to size for this pattern.
+function onSized() { }
 export function beforeRender(delta) {
   dt = delta * 0.001
   if (dt > 0.05) dt = 0.05
   elapsed += dt
 
   frames++
-  if (frames >= 2) mapped = 1
+
+  // ---- Startup: measure the display's real resolution ----
+  if (phase == 0) {
+    if (frames >= 2) {
+      n = 0
+      for (q = 0; q < QMAX; q++) {
+        if (colSeen[q] > 0) { colSeen[q] = n; n++ } else colSeen[q] = -1
+      }
+      nCols = n > 0 ? n : 1
+      if (nCols > MAXCOLS) nCols = MAXCOLS
+      m = 0
+      for (q = 0; q < QMAX; q++) {
+        if (rowSeen[q] > 0) { rowSeen[q] = m; m++ } else rowSeen[q] = -1
+      }
+      nRows = m > 0 ? m : 1
+      if (nRows > MAXROWS) nRows = MAXROWS
+      onSized()
+      phase = 1
+    }
+    return
+  }
+  if (phase == 1) { phase = 2; return }
 
   dw = delta / 2000
 
@@ -204,7 +234,7 @@ export function beforeRender(delta) {
     dead = 0
     if (wAge[s] > wTtl[s]) dead = 1
     if (wCent[s] + wWidth[s] < 0) dead = 1
-    if (wCent[s] - wWidth[s] > barW) dead = 1
+    if (wCent[s] - wWidth[s] > nCols) dead = 1
     if (dead) { wTtl[s] = -1; continue }
     live++
   }
@@ -224,7 +254,7 @@ export function beforeRender(delta) {
 
   // ---- Build the column field ----
   // This is the whole point of the rewrite: once per column, not once per pixel.
-  for (c = 0; c < barW; c++) { colR[c] = 0; colG[c] = 0; colB[c] = 0 }
+  for (c = 0; c < nCols; c++) { colR[c] = 0; colG[c] = 0; colB[c] = 0 }
 
   for (s = 0; s < maxWaves; s++) {
     if (s >= numWaves || wTtl[s] < 0) continue
@@ -234,7 +264,7 @@ export function beforeRender(delta) {
     wid = wWidth[s]
     lo = floor(ctr - wid); hi = floor(ctr + wid)
     if (lo < 0) lo = 0
-    if (hi > barW - 1) hi = barW - 1
+    if (hi > nCols - 1) hi = nCols - 1
     tr = palR[wCol[s]]; tg = palG[wCol[s]]; tb = palB[wCol[s]]
     c = lo
     while (c <= hi) {
@@ -250,17 +280,21 @@ export function beforeRender(delta) {
   }
 
   // Curtains hang: brighter toward the top of the bar, softly falling away.
-  for (rw = 0; rw < barH; rw++) rowMul[rw] = 0.45 + 0.55 * (1 - rw / (barH - 1))
+  for (rw = 0; rw < nRows; rw++) rowMul[rw] = 0.45 + 0.55 * (1 - rw / max(nRows - 1, 1))
 }
 
 export function render3D(index, x, y, z) {
-  if (!mapped) {
-    // First pass: learn this pixel's cell. Rounding to the nearest of the known
-    // positions rather than binning -- the mapper places pixels at exactly
-    // col/159 and (15-row)/15, and floor(x * 160) would drop the last column
-    // into a 161st bin at x = 1.
-    colOf[index] = round(x * (barW - 1))
-    rowOf[index] = round((1 - z) * (barH - 1))
+  if (phase == 0) {
+    // Pass 1: record which quantised positions this display actually has.
+    colSeen[round(x * (QMAX - 1))] = 1
+    rowSeen[round((1 - z) * (QMAX - 1))] = 1
+    rgb(0, 0, 0)
+  } else if (phase == 1) {
+    // Pass 2: ranks exist, so give this pixel its dense cell.
+    c = colSeen[round(x * (QMAX - 1))]
+    r = rowSeen[round((1 - z) * (QMAX - 1))]
+    colOf[index] = c < 0 ? 0 : c
+    rowOf[index] = r < 0 ? 0 : r
     rgb(0, 0, 0)
   } else {
     c = colOf[index]
@@ -276,6 +310,6 @@ export function render2D(index, x, y) {
 
 export function render(index) {
   // No map: the column field still works over the raw index.
-  c = floor(index / pixelCount * barW)
+  c = floor(index / pixelCount * nCols)
   rgb(colR[c], colG[c], colB[c])
 }
