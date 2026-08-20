@@ -62,9 +62,15 @@ elapsed      = 0
 beatPhase    = 0
 
 // ---- Geometry ----
-barW = 160
-barH = 16
-gridSize = barW * barH
+// The scan quantises positions to QMAX steps while counting how many distinct
+// ones exist; it only has to exceed the finest display this will meet.
+QMAX = 256
+MAXCOLS = 256
+MAXROWS = 256
+colSeen = array(QMAX)   // presence flags, then rewritten as rank tables
+rowSeen = array(QMAX)
+nCols = 1
+nRows = 1
 maxRipples = 6
 
 ripX   = array(maxRipples)   // origin column
@@ -72,23 +78,23 @@ ripAge = array(maxRipples)   // seconds since birth; < 0 means the slot is free
 ripHue = array(maxRipples)
 ripLife = array(maxRipples)
 
-colVal = array(barW)
-colHue = array(barW)
-rowMul = array(barH)
+colVal = array(MAXCOLS)
+colHue = array(MAXCOLS)
+rowMul = array(MAXROWS)
 
-colOf = array(gridSize)
-rowOf = array(gridSize)
+colOf = array(pixelCount)
+rowOf = array(pixelCount)
 
 frames = 0
-mapped = 0
+phase = 0        // 0 = scanning, 1 = assigning, 2 = running
 shimmer = 0
 
 for (initIdx = 0; initIdx < maxRipples; initIdx++) ripAge[initIdx] = -1
 
-// Fold a position back into 0..barW-1, bouncing off both ends. Loops because a
+// Fold a position back into 0..nCols-1, bouncing off both ends. Loops because a
 // fast, long-lived front can overshoot the bar several times over.
 function fold(p) {
-  lim = barW - 1
+  lim = nCols - 1
   while (p < 0 || p > lim) {
     if (p < 0) p = -p
     if (p > lim) p = 2 * lim - p
@@ -101,7 +107,7 @@ function paintFront(pos, amp, hue, halfW) {
   c = floor(pos - halfW)
   cEnd = floor(pos + halfW)
   if (c < 0) c = 0
-  if (cEnd > barW - 1) cEnd = barW - 1
+  if (cEnd > nCols - 1) cEnd = nCols - 1
   while (c <= cEnd) {
     d = abs(c - pos) / halfW
     if (d < 1) {
@@ -112,13 +118,36 @@ function paintFront(pos, amp, hue, halfW) {
   }
 }
 
+// Nothing extra to size for this pattern.
+function onSized() { }
 export function beforeRender(delta) {
   dt = delta * 0.001
   if (dt > 0.05) dt = 0.05
   elapsed += dt
 
   frames++
-  if (frames >= 2) mapped = 1
+
+  // ---- Startup: measure the display's real resolution ----
+  if (phase == 0) {
+    if (frames >= 2) {
+      n = 0
+      for (q = 0; q < QMAX; q++) {
+        if (colSeen[q] > 0) { colSeen[q] = n; n++ } else colSeen[q] = -1
+      }
+      nCols = n > 0 ? n : 1
+      if (nCols > MAXCOLS) nCols = MAXCOLS
+      m = 0
+      for (q = 0; q < QMAX; q++) {
+        if (rowSeen[q] > 0) { rowSeen[q] = m; m++ } else rowSeen[q] = -1
+      }
+      nRows = m > 0 ? m : 1
+      if (nRows > MAXROWS) nRows = MAXROWS
+      onSized()
+      phase = 1
+    }
+    return
+  }
+  if (phase == 1) { phase = 2; return }
 
   dw = delta / 2000
 
@@ -177,18 +206,19 @@ export function beforeRender(delta) {
       for (r = 1; r < maxRipples; r++) if (ripAge[r] > ripAge[oldest]) oldest = r
       slot = oldest
     }
-    ripX[slot] = random(barW)
+    ripX[slot] = random(nCols)
     ripAge[slot] = 0
     ripHue[slot] = (peakBin / 31) * 0.72
     ripLife[slot] = 1.0 + decayCtrl * 3.0
   }
 
   // ---- Clear the column field ----
-  for (c = 0; c < barW; c++) colVal[c] = 0
+  for (c = 0; c < nCols; c++) colVal[c] = 0
 
   // ---- Advance and paint ----
-  speed = 40 + speedCtrl * 190          // columns per second
-  halfW = 4 + widthCtrl * 14
+  // Widths per second, scaled to the measured grid.
+  speed = (0.25 + speedCtrl * 1.19) * nCols
+  halfW = max(1, (0.025 + widthCtrl * 0.0875) * nCols)
   live = 0
   for (r = 0; r < maxRipples; r++) {
     if (ripAge[r] < 0) continue
@@ -210,19 +240,23 @@ export function beforeRender(delta) {
   // nothing next to the column field.
   shimmer += dt * 0.35
   if (shimmer >= 256) shimmer -= 256
-  for (rw = 0; rw < barH; rw++) {
-    rowMul[rw] = 0.72 + 0.28 * wave(shimmer + rw / barH * 0.4)
+  for (rw = 0; rw < nRows; rw++) {
+    rowMul[rw] = 0.72 + 0.28 * wave(shimmer + rw / nRows * 0.4)
   }
 }
 
 export function render3D(index, x, y, z) {
-  if (!mapped) {
-    // First pass: learn this pixel's cell. Rounding to the nearest of the known
-    // positions rather than binning -- the mapper places pixels at exactly
-    // col/159 and (15-row)/15, and floor(x * 160) would drop the last column
-    // into a 161st bin at x = 1.
-    colOf[index] = round(x * (barW - 1))
-    rowOf[index] = round((1 - z) * (barH - 1))
+  if (phase == 0) {
+    // Pass 1: record which quantised positions this display actually has.
+    colSeen[round(x * (QMAX - 1))] = 1
+    rowSeen[round((1 - z) * (QMAX - 1))] = 1
+    hsv(0, 0, 0)
+  } else if (phase == 1) {
+    // Pass 2: ranks exist, so give this pixel its dense cell.
+    c = colSeen[round(x * (QMAX - 1))]
+    r = rowSeen[round((1 - z) * (QMAX - 1))]
+    colOf[index] = c < 0 ? 0 : c
+    rowOf[index] = r < 0 ? 0 : r
     hsv(0, 0, 0)
   } else {
     c = colOf[index]
@@ -239,6 +273,6 @@ export function render2D(index, x, y) {
 
 export function render(index) {
   // No map: fall back to 1D over the raw index.
-  c = floor(index / pixelCount * barW)
+  c = floor(index / pixelCount * nCols)
   hsv(colHue[c], 1, colVal[c])
 }

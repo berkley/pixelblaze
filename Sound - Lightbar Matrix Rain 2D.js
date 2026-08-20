@@ -58,37 +58,72 @@ elapsed      = 0
 beatPhase    = 0
 
 // ---- Geometry ----
-barW = 160
-barH = 16
-gridSize = barW * barH
-cols = 40                  // 4px wide each
+// The scan quantises positions to QMAX steps while counting how many distinct
+// ones exist; it only has to exceed the finest display this will meet.
+QMAX = 256
+MAXCOLS = 256
+MAXROWS = 256
+colSeen = array(QMAX)   // presence flags, then rewritten as rank tables
+rowSeen = array(QMAX)
+nCols = 1
+nRows = 1
 bins = 32
 
-head  = array(cols)        // row position of each drop; < -900 means idle
-hue   = array(cols)
+MAXDROPS = 64
+head  = array(MAXDROPS)    // row position of each drop; < -900 means idle
+hue   = array(MAXDROPS)
 bandSpike = array(bins)
 bandLvl   = array(bins)
 bandPeak  = array(bins)
 
 // Column group and row per pixel, captured once. Storing the GROUP rather than
 // the column saves a divide on every pixel of every frame.
-colGrp = array(gridSize)
-rowOf  = array(gridSize)
+colGrp = array(pixelCount)
+rowOf  = array(pixelCount)
 
 fallRate = 8
 trailLen = 6
 frames = 0
-mapped = 0
+phase = 0        // 0 = scanning, 1 = assigning, 2 = running
 
-for (initIdx = 0; initIdx < cols; initIdx++) head[initIdx] = -1000
+for (initIdx = 0; initIdx < MAXDROPS; initIdx++) head[initIdx] = -1000
 
+cols = 1
+grpW = 1
+function onSized() {
+  // One drop column per ~4 display columns, capped by the fixed arrays.
+  cols = max(2, min(MAXDROPS, ceil(nCols / 4)))
+  grpW = nCols / cols
+  for (ic = 0; ic < cols; ic++) head[ic] = -1000
+}
 export function beforeRender(delta) {
   dt = delta * 0.001
   if (dt > 0.05) dt = 0.05
   elapsed += dt
 
   frames++
-  if (frames >= 2) mapped = 1
+
+  // ---- Startup: measure the display's real resolution ----
+  if (phase == 0) {
+    if (frames >= 2) {
+      n = 0
+      for (q = 0; q < QMAX; q++) {
+        if (colSeen[q] > 0) { colSeen[q] = n; n++ } else colSeen[q] = -1
+      }
+      nCols = n > 0 ? n : 1
+      if (nCols > MAXCOLS) nCols = MAXCOLS
+      m = 0
+      for (q = 0; q < QMAX; q++) {
+        if (rowSeen[q] > 0) { rowSeen[q] = m; m++ } else rowSeen[q] = -1
+      }
+      nRows = m > 0 ? m : 1
+      if (nRows > MAXROWS) nRows = MAXROWS
+      onSized()
+      phase = 1
+    }
+    return
+  }
+  if (phase == 1) { phase = 2; return }
 
   dw = delta / 2000
 
@@ -146,7 +181,7 @@ export function beforeRender(delta) {
   // Rows per second, from beats per fall. Tempo-locked so the rain lands with
   // the music rather than drifting against it.
   beatsPerFall = 0.5 + fallCtrl * 3
-  fallRate = (barH + trailLen) / (beatsPerFall * 60 / detectedBpm)
+  fallRate = (nRows + trailLen) / (beatsPerFall * 60 / detectedBpm)
 
   // ---- Launch drops on the kick ----
   if (beat) {
@@ -172,21 +207,24 @@ export function beforeRender(delta) {
     if (head[c] < -900) continue
     head[c] += fallRate * dt
     // Retire once the whole trail has cleared the bottom edge.
-    if (head[c] - trailLen > barH) head[c] = -1000
+    if (head[c] - trailLen > nRows) head[c] = -1000
     else live++
   }
   liveDrops = live
 }
 
 export function render3D(index, x, y, z) {
-  if (!mapped) {
-    // First pass: learn this pixel's column group and row. Rounding to the
-    // nearest of the known positions rather than binning -- the mapper places
-    // pixels at exactly col/159 and (15-row)/15, and floor(x * 160) would drop
-    // the last column into a 161st bin at x = 1.
-    col = round(x * (barW - 1))
-    colGrp[index] = floor(col / 4)
-    rowOf[index] = round((1 - z) * (barH - 1))
+  if (phase == 0) {
+    // Pass 1: record which quantised positions this display actually has.
+    colSeen[round(x * (QMAX - 1))] = 1
+    rowSeen[round((1 - z) * (QMAX - 1))] = 1
+    hsv(0, 0, 0)
+  } else if (phase == 1) {
+    // Pass 2: ranks exist, so give this pixel its dense cell.
+    c = colSeen[round(x * (QMAX - 1))]
+    r = rowSeen[round((1 - z) * (QMAX - 1))]
+    colGrp[index] = floor((c < 0 ? 0 : c) / grpW)
+    rowOf[index] = r < 0 ? 0 : r
     hsv(0, 0, 0)
   } else {
     g = colGrp[index]

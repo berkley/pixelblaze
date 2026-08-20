@@ -69,30 +69,58 @@ totAvg       = 0
 totPeak      = 0
 
 // ---- Geometry ----
-barW = 160
-barH = 16
-gridSize = barW * barH
-diagN = barW + barH        // col + row spans 0 .. 174
+// The scan quantises positions to QMAX steps while counting how many distinct
+// ones exist; it only has to exceed the finest display this will meet.
+QMAX = 256
+MAXCOLS = 256
+MAXROWS = 256
+colSeen = array(QMAX)   // presence flags, then rewritten as rank tables
+rowSeen = array(QMAX)
+nCols = 1
+nRows = 1
 
-colF  = array(barW)
-diagF = array(diagN)
-colOf = array(gridSize)
-rowOf = array(gridSize)
+colF  = array(MAXCOLS)
+diagF = array(MAXCOLS + MAXROWS)
+colOf = array(pixelCount)
+rowOf = array(pixelCount)
 
 driftA = 0
 driftB = 0
 hueBase = 0
 beatLift = 0
 frames = 0
-mapped = 0
+phase = 0        // 0 = scanning, 1 = assigning, 2 = running
 
+diagN = 2
+function onSized() { diagN = nCols + nRows }
 export function beforeRender(delta) {
   dt = delta * 0.001
   if (dt > 0.05) dt = 0.05
   elapsed += dt
 
   frames++
-  if (frames >= 2) mapped = 1
+
+  // ---- Startup: measure the display's real resolution ----
+  if (phase == 0) {
+    if (frames >= 2) {
+      n = 0
+      for (q = 0; q < QMAX; q++) {
+        if (colSeen[q] > 0) { colSeen[q] = n; n++ } else colSeen[q] = -1
+      }
+      nCols = n > 0 ? n : 1
+      if (nCols > MAXCOLS) nCols = MAXCOLS
+      m = 0
+      for (q = 0; q < QMAX; q++) {
+        if (rowSeen[q] > 0) { rowSeen[q] = m; m++ } else rowSeen[q] = -1
+      }
+      nRows = m > 0 ? m : 1
+      if (nRows > MAXROWS) nRows = MAXROWS
+      onSized()
+      phase = 1
+    }
+    return
+  }
+  if (phase == 1) { phase = 2; return }
 
   dw = delta / 2000
 
@@ -161,8 +189,10 @@ export function beforeRender(delta) {
   if (driftA >= 256) driftA -= 256
   if (driftB >= 256) driftB -= 256
 
-  sc = 0.012 + scaleCtrl * 0.045
-  for (c = 0; c < barW; c++) colF[c] = perlin(c * sc, 0, driftA, 0)
+  // Spatial frequency spans a constant number of noise units across the
+  // display, so structure looks the same at any resolution.
+  sc = (1.9 + scaleCtrl * 7.2) / nCols
+  for (c = 0; c < nCols; c++) colF[c] = perlin(c * sc, 0, driftA, 0)
   for (d = 0; d < diagN; d++) diagF[d] = perlin(0, d * sc * 1.35, driftB, 0)
 
   // Base hue slides with the spectral centroid: bassy music sits red, bright
@@ -171,13 +201,17 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  if (!mapped) {
-    // First pass: learn this pixel's cell. Rounding to the nearest of the known
-    // positions rather than binning -- the mapper places pixels at exactly
-    // col/159 and (15-row)/15, and floor(x * 160) would drop the last column
-    // into a 161st bin at x = 1.
-    colOf[index] = round(x * (barW - 1))
-    rowOf[index] = round((1 - z) * (barH - 1))
+  if (phase == 0) {
+    // Pass 1: record which quantised positions this display actually has.
+    colSeen[round(x * (QMAX - 1))] = 1
+    rowSeen[round((1 - z) * (QMAX - 1))] = 1
+    hsv(0, 0, 0)
+  } else if (phase == 1) {
+    // Pass 2: ranks exist, so give this pixel its dense cell.
+    c = colSeen[round(x * (QMAX - 1))]
+    r = rowSeen[round((1 - z) * (QMAX - 1))]
+    colOf[index] = c < 0 ? 0 : c
+    rowOf[index] = r < 0 ? 0 : r
     hsv(0, 0, 0)
   } else {
     c = colOf[index]
@@ -202,7 +236,7 @@ export function render2D(index, x, y) {
 
 export function render(index) {
   // No map: fall back to the column strip alone over the raw index.
-  c = floor(index / pixelCount * barW)
+  c = floor(index / pixelCount * nCols)
   n = colF[c]
   h = hueBase + n * 0.3
   hsv(h - floor(h), 1, 0.5 + n * 0.4)
