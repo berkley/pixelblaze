@@ -105,9 +105,19 @@ export var windX            = 0
 export var energyNorm       = 0
 
 // ---- Geometry ----
-barW = 160
-barH = 16
-gridSize = barW * barH        // 2560
+// The scan quantises positions to QMAX steps while counting how many distinct
+// ones exist; it only has to exceed the finest display this will meet.
+QMAX = 256
+MAXGRID = 2560
+MAXROW = 256                  // scratch row for tearing, sized for the widest
+
+// colSeen/rowSeen serve twice: presence flags during the scan, then rewritten
+// in place as rank tables mapping a quantised position to a dense index.
+colSeen = array(QMAX)
+rowSeen = array(QMAX)
+nCols = 1
+nRows = 1
+gridSize = 1
 maxParticles = 160
 bins = 32
 
@@ -145,15 +155,18 @@ pmax  = array(maxParticles)   // total lifespan, for the fade envelope
 pdrag = array(maxParticles)   // per-particle responsiveness multiplier
 
 // ---- Trail framebuffer, indexed by pixel index ----
-pixHue = array(gridSize)
-pixVal = array(gridSize)
-idxOf  = array(gridSize)      // grid position (row * barW + col) -> pixel index
-scratch = array(barW)         // one row, for tearing
+// Framebuffer in GRID space, so a pixel reads the cell it occupies rather than
+// the pattern writing through a grid-to-pixel table -- cells no pixel claimed
+// held 0 in the old code and collapsed the whole pattern onto pixel 0.
+gridHue = array(MAXGRID)
+gridVal = array(MAXGRID)
+pxCell  = array(pixelCount)   // pixel index -> its grid cell
+scratch = array(MAXROW)       // one row, for tearing
 
 spawnAccum = 0
 decay = 0.5
 frames = 0
-mapped = 0
+phase = 0        // 0 = scanning positions, 1 = assigning pixels, 2 = running
 
 // ---- Glitch state ----
 // A beat starts a wavefront at the edge the burst spawned from. The front
@@ -194,20 +207,20 @@ function pickBassBin() {
 // Hue and value are shifted in separate passes so only one scratch row is
 // needed; the array budget will not take a second.
 function tearRow(r, k) {
-  base = r * barW
-  for (c = 0; c < barW; c++) scratch[c] = pixVal[idxOf[base + c]]
-  for (c = 0; c < barW; c++) {
+  base = r * nCols
+  for (c = 0; c < nCols; c++) scratch[c] = gridVal[base + c]
+  for (c = 0; c < nCols; c++) {
     sc = c - k
-    sc = sc % barW
-    if (sc < 0) sc += barW
-    pixVal[idxOf[base + c]] = scratch[sc]
+    sc = sc % nCols
+    if (sc < 0) sc += nCols
+    gridVal[base + c] = scratch[sc]
   }
-  for (c = 0; c < barW; c++) scratch[c] = pixHue[idxOf[base + c]]
-  for (c = 0; c < barW; c++) {
+  for (c = 0; c < nCols; c++) scratch[c] = gridHue[base + c]
+  for (c = 0; c < nCols; c++) {
     sc = c - k
-    sc = sc % barW
-    if (sc < 0) sc += barW
-    pixHue[idxOf[base + c]] = scratch[sc]
+    sc = sc % nCols
+    if (sc < 0) sc += nCols
+    gridHue[base + c] = scratch[sc]
   }
 }
 
@@ -217,8 +230,8 @@ function spawnOne(useBass) {
   for (s = 0; s < maxParticles; s++) {
     if (plife[s] <= 0) {
       if (windX >= 0) px[s] = random(6)
-      else px[s] = barW - 1 - random(6)
-      py[s] = random(barH - 1)
+      else px[s] = nCols - 1 - random(6)
+      py[s] = random(nRows - 1)
       pvx[s] = windX
       pvy[s] = 0
       pbin[s] = useBass ? pickBassBin() : pickBin()
@@ -240,10 +253,28 @@ export function beforeRender(delta) {
 
   elapsed += dt
 
-  // One full render pass has completed by the second beforeRender, so idxOf[]
-  // is populated and particles can be splatted into the framebuffer.
   frames++
-  if (frames >= 2) mapped = 1
+
+  // ---- Startup: measure the display, then assign pixels to cells ----
+  if (phase == 0) {
+    if (frames >= 2) {
+      n = 0
+      for (q = 0; q < QMAX; q++) {
+        if (colSeen[q] > 0) { colSeen[q] = n; n++ } else colSeen[q] = -1
+      }
+      nCols = n > 0 ? n : 1
+      m = 0
+      for (q = 0; q < QMAX; q++) {
+        if (rowSeen[q] > 0) { rowSeen[q] = m; m++ } else rowSeen[q] = -1
+      }
+      nRows = m > 0 ? m : 1
+      gridSize = nCols * nRows
+      if (gridSize > MAXGRID) gridSize = MAXGRID
+      phase = 1
+    }
+    return
+  }
+  if (phase == 1) { phase = 2; return }
 
   // ---- Per-bin AGC ----
   dw = delta / 2000
@@ -308,7 +339,9 @@ export function beforeRender(delta) {
   wclock += dt
   if (wclock >= 256) wclock -= 256
   gust = (wave(wclock * 0.0625) - 0.5) + 0.6 * (wave(wclock * 0.09375) - 0.5)
-  windX = (20 + windCtrl * 70) * gust * (0.35 + energyNorm * 1.5)
+  // Widths per second, scaled to the measured grid. In pixels this would blow
+  // a narrow display many times too fast.
+  windX = (0.125 + windCtrl * 0.4375) * nCols * gust * (0.35 + energyNorm * 1.5)
 
   nScroll += dt * 0.25
   if (nScroll >= 256) nScroll -= 256
@@ -330,7 +363,7 @@ export function beforeRender(delta) {
 
     // Start a glitch wavefront at the edge this burst enters from.
     glitchPulse = min(bassSpike, 1)
-    glitchX = windX >= 0 ? 0 : barW - 1
+    glitchX = windX >= 0 ? 0 : nCols - 1
     glitchFront = 0
     // Burst size grows with the gap left to fill, so a high Particles setting
     // actually reaches its target. With a fixed burst size the top half of the
@@ -372,7 +405,7 @@ export function beforeRender(delta) {
   glitchBand = 20 + glitchStep * 0.6
 
   // ---- Integrate + splat ----
-  turbAmp = 15 + turbCtrl * 55
+  turbAmp = (0.094 + turbCtrl * 0.344) * nCols
   resp = 2.5                     // low, so particles carry momentum
   zc = nScroll + turbSeed
   tailHalfLife = 0.05 + tailCtrl * 1.15
@@ -385,8 +418,11 @@ export function beforeRender(delta) {
     if (plife[i] <= 0) continue
     alive++
 
-    nx = px[i] * 0.035
-    ny = py[i] * 0.09
+    // Sample so the field spans a constant number of perlin units across the
+    // display, whatever its resolution -- px[i] * 0.035 assumed 160 columns and
+    // gave almost no variation across a narrow one.
+    nx = px[i] / nCols * 5.6
+    ny = py[i] / nRows * 1.44
     // Split the swarm across 8 slightly offset slices of the noise field.
     // Sampling one shared field made particles at similar positions follow
     // near-identical paths, which looked far too orderly for wind.
@@ -404,7 +440,7 @@ export function beforeRender(delta) {
     if (glitchNow > 0.002) {
       gd = px[i] - glitchX
       if (gd < 0) gd = -gd
-      if (gd > barW * 0.5) gd = barW - gd     // x wraps, so measure the short way
+      if (gd > nCols * 0.5) gd = nCols - gd    // x wraps, so measure the short way
       if (abs(gd - glitchFront) < glitchBand && random(1) < glitchNow) {
         gk = random(1)
         if (gk < 0.45) {
@@ -428,16 +464,16 @@ export function beforeRender(delta) {
     nxp = px[i] + vx * dt
     nyp = py[i] + vy * dt
 
-    nxp = nxp % barW
-    if (nxp < 0) nxp += barW
+    nxp = nxp % nCols
+    if (nxp < 0) nxp += nCols
 
     if (nyp < 0) { nyp = -nyp; pvy[i] = -pvy[i] * 0.6 }
-    else if (nyp > barH - 1) { nyp = 2 * (barH - 1) - nyp; pvy[i] = -pvy[i] * 0.6 }
+    else if (nyp > nRows - 1) { nyp = 2 * (nRows - 1) - nyp; pvy[i] = -pvy[i] * 0.6 }
 
     px[i] = nxp
     py[i] = nyp
 
-    if (mapped) {
+    {
       // Fast attack, slow release. A symmetric wave() envelope is smoother but
       // is ZERO at birth and only peaks at mid-life, so a particle spawned on a
       // kick took seconds to become visible -- which made the bass impossible
@@ -455,33 +491,41 @@ export function beforeRender(delta) {
         ix = floor(nxp); fx = nxp - ix
         iy = floor(nyp); fy = nyp - iy
         ix1 = ix + 1
-        if (ix1 >= barW) ix1 -= barW   // x wraps; y does not
+        if (ix1 >= nCols) ix1 -= nCols   // x wraps; y does not
 
         w00 = (1 - fx) * (1 - fy) * bri
         w10 = fx * (1 - fy) * bri
         w01 = (1 - fx) * fy * bri
         w11 = fx * fy * bri
 
-        rb = iy * barW
-        q = idxOf[rb + ix];  if (w00 > pixVal[q]) { pixVal[q] = w00; pixHue[q] = hu }
-        q = idxOf[rb + ix1]; if (w10 > pixVal[q]) { pixVal[q] = w10; pixHue[q] = hu }
-        if (iy + 1 < barH) {
-          rb = (iy + 1) * barW
-          q = idxOf[rb + ix];  if (w01 > pixVal[q]) { pixVal[q] = w01; pixHue[q] = hu }
-          q = idxOf[rb + ix1]; if (w11 > pixVal[q]) { pixVal[q] = w11; pixHue[q] = hu }
+        rb = iy * nCols
+        q = rb + ix;  if (w00 > gridVal[q]) { gridVal[q] = w00; gridHue[q] = hu }
+        q = rb + ix1; if (w10 > gridVal[q]) { gridVal[q] = w10; gridHue[q] = hu }
+        if (iy + 1 < nRows) {
+          rb = (iy + 1) * nCols
+          q = rb + ix;  if (w01 > gridVal[q]) { gridVal[q] = w01; gridHue[q] = hu }
+          q = rb + ix1; if (w11 > gridVal[q]) { gridVal[q] = w11; gridHue[q] = hu }
         }
       }
     }
   }
+  // ---- Tail decay ----
+  // Over grid cells, not pixels: several pixels can share a cell, so decaying
+  // in render would decay a shared cell once per pixel sharing it.
+  for (ci = 0; ci < gridSize; ci++) {
+    gv = gridVal[ci]
+    if (gv > 0) gridVal[ci] = gv > 0.004 ? gv * decay : 0
+  }
+
   // ---- Row tearing ----
   // Only while the pulse is still strong, so tears land on the beat and are
   // gone before the next one. Two rows a frame at most: each costs four passes
   // over a 160-pixel row and this runs on an already tight frame budget.
-  if (mapped && glitchNow > 0.25) {
+  if (glitchNow > 0.25) {
     tears = 1 + floor(random(2))
     for (tq = 0; tq < tears; tq++) {
       if (random(1) < glitchNow) {
-        tearRow(floor(random(barH)), floor((random(1) * 2 - 1) * 14))
+        tearRow(floor(random(nRows)), floor((random(1) * 2 - 1) * 0.0875 * nCols))
       }
     }
   }
@@ -490,21 +534,24 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  if (!mapped) {
-    // First pass: learn where this pixel sits on the 160x16 grid. Rounding to
-    // the nearest of the known positions rather than binning a continuous
-    // coordinate -- the mapper places pixels at exactly col/159 and (15-row)/15,
-    // and floor(x * 160) would drop the last column into a 161st bin at x = 1.
-    col = round(x * (barW - 1))
-    row = round((1 - z) * (barH - 1))
-    idxOf[row * barW + col] = index
+  if (phase == 0) {
+    // Pass 1: record which quantised positions this display actually has.
+    colSeen[round(x * (QMAX - 1))] = 1
+    rowSeen[round((1 - z) * (QMAX - 1))] = 1
+    hsv(0, 0, 0)
+  } else if (phase == 1) {
+    // Pass 2: the ranks exist, so give this pixel its dense cell.
+    c = colSeen[round(x * (QMAX - 1))]
+    r = rowSeen[round((1 - z) * (QMAX - 1))]
+    if (c < 0) c = 0
+    if (r < 0) r = 0
+    pxCell[index] = r * nCols + c
     hsv(0, 0, 0)
   } else {
-    // Trail decay happens here rather than in a separate sweep, so every pixel
-    // is touched exactly once per frame.
-    v = pixVal[index] * decay
-    pixVal[index] = v
-    if (v > 0.004) hsv(pixHue[index], 1, v)
+    // Forward lookup: this pixel reads the cell it occupies.
+    p = pxCell[index]
+    v = gridVal[p]
+    if (v > 0.004) hsv(gridHue[p], 1, v)
     else hsv(0, 0, 0)
   }
 }
